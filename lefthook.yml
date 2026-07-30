@@ -1,0 +1,15 @@
+pre-commit:
+  parallel: true
+  jobs:
+    - name: format
+      glob: "*.go"
+      run: gofmt -w {staged_files}
+      stage_fixed: true
+
+    - name: test
+      run: ./scripts/for-each-tiny-project.sh go test ./...
+
+pre-push:
+  jobs:
+    - name: lint
+      run: ./scripts/for-each-tiny-project.sh golangci-lint run ./...

@@ -30,6 +30,7 @@
               gotools
               golangci-lint
               go-tools
+              lefthook
             ];
 
             shellHook = ''
