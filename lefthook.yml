@@ -6,10 +6,14 @@ pre-commit:
       run: gofmt -w {staged_files}
       stage_fixed: true
 
-    - name: test
-      run: ./scripts/for-each-tiny-project.sh go test ./...
+    - name: unit tests
+      run: ./scripts/for-each-tiny-project.sh go test -short ./...
 
 pre-push:
+  parallel: true
   jobs:
+    - name: race tests
+      run: ./scripts/for-each-tiny-project.sh go test -race -shuffle=on ./...
+
     - name: lint
       run: ./scripts/for-each-tiny-project.sh golangci-lint run ./...
