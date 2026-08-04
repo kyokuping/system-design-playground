@@ -11,7 +11,8 @@
 - 입력받은 URL이 유효한 HTTP 또는 HTTPS URL인지 검사한다.
 - 동일한 긴 URL에는 동일한 단축 키를 반환한다.
 - 존재하지 않는 단축 키와 잘못된 요청에 적절한 오류를 반환한다.
-- 단축 URL 요청을 원본 URL로 리다이렉트한다.
+- 단축 URL 요청을 `307 Temporary Redirect`로 원본 URL에 리다이렉트한다.
+- `user_id`를 기준으로 URL 생성자와 URL 소유권을 관리한다.
 
 ### 추후 지원
 
@@ -19,7 +20,6 @@
 - 마지막 사용 시점으로부터 6개월이 지난 단축 URL을 만료시킨다.
 - URL 생성자가 원본 URL을 수정하거나 URL 매핑을 삭제한다.
 - 단축 URL의 사용량을 분석하고 모니터링한다.
-- 사용자 계정과 URL 소유권을 관리한다.
 
 ## 비기능적 요구사항
 
@@ -31,6 +31,28 @@
 
 구체적인 일일 활성 사용자 수, URL 생성량, 초당 조회량은 용량 산정 단계에서
 추가로 정의한다.
+
+## 서비스 계층 계약
+
+서비스 계층은 `Ab12Cd34`와 같은 `shortKey`만 반환한다. HTTP 계층은
+서비스가 반환한 키에 기본 도메인을 붙여
+`https://tiny.url/Ab12Cd34`와 같은 완성된 단축 URL을 생성한다.
+
+서비스 계층에서 발생할 수 있는 오류는 다음과 같이 sentinel error로
+정의한다.
+
+```go
+var (
+	ErrInvalidUserID      = errors.New("invalid user id")
+	ErrInvalidURL         = errors.New("invalid url")
+	ErrURLMappingNotFound = errors.New("url mapping not found")
+	ErrShortURLConflict   = errors.New("short URL already exists")
+)
+```
+
+호출자는 `errors.Is`로 오류를 구분한다. HTTP 계층은 `ErrInvalidUserID`와
+`ErrInvalidURL`을 `400 Bad Request`로, `ErrURLMappingNotFound`를
+`404 Not Found`로 변환한다.
 
 ## API 계약
 
