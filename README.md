@@ -22,6 +22,7 @@
 - **Language**: Go
 - **Dev Environment**: Nix (`flake.nix`)
 - **Git Hooks**: Lefthook
+- **Local Infrastructure**: Docker Compose
 
 ---
 
@@ -67,18 +68,24 @@ lefthook run pre-push
 
 ```text
 system-design-playground/
-├── flake.nix                         
-├── flake.lock                        
-├── lefthook.yml                      
+├── flake.nix
+├── flake.lock
+├── lefthook.yml
 ├── scripts/
 │   ├── setup.sh                      # Lefthook 설치
 │   └── for-each-tiny-project.sh      # 모든 tiny_* 모듈에서 명령 실행
 └── tiny_<system>/                    # 시스템 설계 실습별 독립 Go 모듈
     ├── go.mod
+    ├── compose.yaml                  # 공통 인프라
+    ├── compose.dev.yaml              # 개발 환경 오버레이
+    ├── compose.prod.yaml             # 배포 환경 오버레이
     ├── README.md
+    ├── deploy/
+    │   └── nginx/                    # Compose 로드밸런서 설정
     ├── docs/
-    │   ├── book-notes.md             # 책을 공부하며 정리한 내용
-    │   └── design.md                 # 직접 설계한 구조와 트레이드오프
+    │   ├── design.md                 # 직접 설계한 구조와 트레이드오프
+    │   ├── notes.md                  # 책을 공부하며 정리한 내용
+    │   └── decisions/                # Architecture Decision Records
     ├── cmd/
     └── internal/
 ```

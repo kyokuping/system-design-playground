@@ -32,40 +32,53 @@
 구체적인 일일 활성 사용자 수, URL 생성량, 초당 조회량은 용량 산정 단계에서
 추가로 정의한다.
 
-## API 설계안
+## API 계약
 
 ### URL 단축
 
-`POST /shorten`
+`POST /api/v1/short-urls`
 
 요청:
 
 ```json
 {
+  "user_id": "user-123",
   "url": "https://example.com/very/long/path"
 }
 ```
 
-성공 응답 (`201 Created`):
+신규 매핑은 `201 Created`와 관리 리소스 경로를 반환한다.
+
+```http
+Location: /api/v1/short-urls/Ab12Cd34
+```
 
 ```json
 {
-  "short_url": "https://tiny.url/Ab12Cd34"
+  "short_key": "Ab12Cd34",
+  "short_url": "https://tiny.url/Ab12Cd34",
+  "long_url": "https://example.com/very/long/path"
 }
 ```
 
 잘못된 URL을 전달하면 `400 Bad Request`를 반환한다.
 
-### 원본 URL 조회
+### 관리용 매핑 조회
 
-`GET /shorturls/{short_url}`
+`GET /api/v1/short-urls/{shortKey}`
 
-성공 응답 (`200 OK`):
+성공하면 생성 응답과 같은 매핑 정보를 `200 OK` JSON으로 반환한다. 이 요청은
+공개 링크 방문 횟수와 마지막 접근 시각을 갱신하지 않는다.
 
-```json
-{
-  "url": "https://example.com/very/long/path"
-}
+### 공개 리다이렉트
+
+`GET /{shortKey}`
+
+성공 응답 (`307 Temporary Redirect`):
+
+```http
+HTTP/1.1 307 Temporary Redirect
+Location: https://example.com/very/long/path
 ```
 
 단축 키가 존재하지 않으면 `404 Not Found`를 반환한다.
