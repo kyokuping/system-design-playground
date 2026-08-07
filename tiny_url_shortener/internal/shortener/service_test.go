@@ -187,6 +187,26 @@ func TestGetShortURL_DifferentUsersOwnSharedKey(t *testing.T) {
 	}
 }
 
+func TestGetShortURL_AtomicallySavesMappingAndFirstOwner(t *testing.T) {
+	repository := &transactionalCreationRepository{}
+	generator := &sequenceKeyGenerator{keys: []string{testShortKey}}
+	service := newShortenerWithDependencies(repository, generator)
+
+	shortKey, created, err := service.GetShortURL(testUserID, parseURL(t, "https://example.com/alpha"))
+	if err != nil {
+		t.Fatalf("GetShortURL() error = %v", err)
+	}
+	if shortKey != testShortKey || !created {
+		t.Fatalf("GetShortURL() = (%q, %t)", shortKey, created)
+	}
+	if repository.transactionCalls != 1 {
+		t.Fatalf("transaction calls = %d, want 1", repository.transactionCalls)
+	}
+	if repository.saveCalls != 0 || repository.ownerCalls != 0 {
+		t.Fatalf("non-transactional calls = save %d, owner %d", repository.saveCalls, repository.ownerCalls)
+	}
+}
+
 func TestGetShortURL_NormalizesEquivalentURLs(t *testing.T) {
 	skipExpectedFailure(t)
 
@@ -341,6 +361,27 @@ type ownershipRepository struct {
 	byShortKey map[string]URLMapping
 	byLongURL  map[string]URLMapping
 	owners     map[string]map[string]bool
+}
+
+type transactionalCreationRepository struct{ transactionCalls, saveCalls, ownerCalls int }
+
+func (r *transactionalCreationRepository) Save(context.Context, URLMapping) error {
+	r.saveCalls++
+	return nil
+}
+func (r *transactionalCreationRepository) AddOwner(context.Context, URLOwnership) error {
+	r.ownerCalls++
+	return nil
+}
+func (*transactionalCreationRepository) FindByShortKey(context.Context, string) (URLMapping, error) {
+	return URLMapping{}, ErrURLMappingNotFound
+}
+func (*transactionalCreationRepository) FindByLongURL(context.Context, *url.URL) (URLMapping, error) {
+	return URLMapping{}, ErrURLMappingNotFound
+}
+func (r *transactionalCreationRepository) SaveWithOwner(context.Context, URLMapping, URLOwnership) error {
+	r.transactionCalls++
+	return nil
 }
 
 func newOwnershipRepository() *ownershipRepository {
