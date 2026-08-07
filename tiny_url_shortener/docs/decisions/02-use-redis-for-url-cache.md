@@ -5,6 +5,13 @@
 - Related documents:
   - [Tiny URL Shortener Design](../design.md)
   - [01. Use PostgreSQL as the Source of Truth for URL Mappings](01-use-postgresql-as-source-of-truth.md)
+  - [05. Prefer Positive Cache Entries with Conditional Negative Caching](05-prioritize-positive-cache-over-negative-cache.md)
+  - [06. Preserve Expiration Metadata in the URL Cache](06-preserve-expiration-metadata-in-url-cache.md)
+
+> The Redis selection and cache-aside decision remain valid. ADR 05 supersedes
+> the initial cache-value format, creation-time invalidation, and negative-cache
+> write policy; ADR 06 supersedes the expiration metadata and serialization
+> format.
 
 ## Context
 
@@ -55,7 +62,11 @@ Go application
 Redis is not the source of truth for URL mappings. PostgreSQL must retain the
 URL mappings even if all Redis data is deleted or Redis stops responding.
 
-The initial cache format and policy are:
+The initial cache format and policy follow. This format was later superseded by
+the JSON format in [ADR 06](06-preserve-expiration-metadata-in-url-cache.md),
+and the write policy was superseded by the conditional negative-caching policy
+in [ADR 05](05-prioritize-positive-cache-over-negative-cache.md). The
+`cache:url:v1:` key prefix remains unchanged after both revisions.
 
 ```text
 key:   cache:url:v1:{shortKey}

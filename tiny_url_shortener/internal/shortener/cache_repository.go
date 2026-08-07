@@ -9,12 +9,18 @@ import (
 
 var ErrCacheMiss = errors.New("cache miss")
 
+type CachedURL struct {
+	LongURL        string
+	LastAccessedAt time.Time
+	Negative       bool
+}
+
 // URLCache is deliberately smaller than a Redis client so cache behavior can
 // be tested without a running server and replaced without affecting the domain.
 type URLCache interface {
-	Get(ctx context.Context, shortKey string) (longURL string, negative bool, err error)
-	Set(ctx context.Context, shortKey, longURL string, ttl time.Duration) error
-	SetNegative(ctx context.Context, shortKey string, ttl time.Duration) error
+	Get(ctx context.Context, shortKey string) (CachedURL, error)
+	SetPositive(ctx context.Context, mapping URLMapping, ttl time.Duration) error
+	SetNegativeIfAbsent(ctx context.Context, shortKey string, ttl time.Duration) (bool, error)
 	Delete(ctx context.Context, shortKey string) error
 }
 
@@ -35,7 +41,7 @@ func (r *CachedRepository) Save(ctx context.Context, mapping URLMapping) error {
 	if err := r.source.Save(ctx, mapping); err != nil {
 		return err
 	}
-	_ = r.cache.Delete(ctx, mapping.ShortKey)
+	_ = r.cache.SetPositive(ctx, mapping, r.positiveTTL)
 	return nil
 }
 
@@ -52,7 +58,7 @@ func (r *CachedRepository) SaveWithOwner(ctx context.Context, mapping URLMapping
 			return err
 		}
 	}
-	_ = r.cache.Delete(ctx, mapping.ShortKey)
+	_ = r.cache.SetPositive(ctx, mapping, r.positiveTTL)
 	return nil
 }
 
@@ -61,25 +67,46 @@ func (r *CachedRepository) AddOwner(ctx context.Context, ownership URLOwnership)
 }
 
 func (r *CachedRepository) FindByShortKey(ctx context.Context, shortKey string) (URLMapping, error) {
-	if rawURL, negative, err := r.cache.Get(ctx, shortKey); err == nil {
-		if negative {
+	if cached, err := r.cache.Get(ctx, shortKey); err == nil {
+		if cached.Negative {
 			return URLMapping{}, ErrURLMappingNotFound
 		}
-		parsed, parseErr := url.Parse(rawURL)
-		if parseErr == nil {
-			return URLMapping{ShortKey: shortKey, LongURL: parsed}, nil
+		if mapping, ok := mappingFromCache(shortKey, cached); ok {
+			return mapping, nil
 		}
 	}
 
 	mapping, err := r.source.FindByShortKey(ctx, shortKey)
 	if err != nil {
 		if errors.Is(err, ErrURLMappingNotFound) {
-			_ = r.cache.SetNegative(ctx, shortKey, r.negativeTTL)
+			stored, cacheErr := r.cache.SetNegativeIfAbsent(ctx, shortKey, r.negativeTTL)
+			if cacheErr == nil && !stored {
+				if cached, getErr := r.cache.Get(ctx, shortKey); getErr == nil {
+					if cached.Negative {
+						return URLMapping{}, ErrURLMappingNotFound
+					}
+					if winner, ok := mappingFromCache(shortKey, cached); ok {
+						return winner, nil
+					}
+				}
+			}
 		}
 		return URLMapping{}, err
 	}
-	_ = r.cache.Set(ctx, shortKey, mapping.LongURL.String(), r.positiveTTL)
+	_ = r.cache.SetPositive(ctx, mapping, r.positiveTTL)
 	return mapping, nil
+}
+
+func mappingFromCache(shortKey string, cached CachedURL) (URLMapping, bool) {
+	parsed, err := url.Parse(cached.LongURL)
+	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" || cached.LastAccessedAt.IsZero() {
+		return URLMapping{}, false
+	}
+	return URLMapping{
+		ShortKey:       shortKey,
+		LongURL:        parsed,
+		LastAccessedAt: cached.LastAccessedAt,
+	}, true
 }
 
 func (r *CachedRepository) FindByLongURL(ctx context.Context, longURL *url.URL) (URLMapping, error) {
@@ -91,7 +118,18 @@ func (r *CachedRepository) RecordAccess(ctx context.Context, shortKey string, at
 	if !ok {
 		return nil
 	}
-	return recorder.RecordAccess(ctx, shortKey, at)
+	if err := recorder.RecordAccess(ctx, shortKey, at); err != nil {
+		return err
+	}
+	if cached, err := r.cache.Get(ctx, shortKey); err == nil && !cached.Negative {
+		if mapping, valid := mappingFromCache(shortKey, cached); valid {
+			mapping.LastAccessedAt = at
+			if err := r.cache.SetPositive(ctx, mapping, r.positiveTTL); err != nil {
+				_ = r.cache.Delete(ctx, shortKey)
+			}
+		}
+	}
+	return nil
 }
 
 func (r *CachedRepository) Statistics(ctx context.Context, shortKey string) (URLStatistics, error) {
