@@ -154,8 +154,6 @@ func TestGetShortURL_ExpiredKeyReturnsGone(t *testing.T) {
 }
 
 func TestGetURLMapping_ReturnsJSONWithoutRedirect(t *testing.T) {
-	skipExpectedFailure(t)
-
 	longURL := mustParseURL(t, "https://example.com/very/long/path")
 	service := &stubURLService{mappingURL: longURL}
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/short-urls/Ab12Cd3", nil)
@@ -170,8 +168,6 @@ func TestGetURLMapping_ReturnsJSONWithoutRedirect(t *testing.T) {
 }
 
 func TestGetURLMapping_UnknownKeyReturnsNotFound(t *testing.T) {
-	skipExpectedFailure(t)
-
 	service := &stubURLService{mappingErr: shortener.ErrURLMappingNotFound}
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/short-urls/Unknown", nil)
 	response := httptest.NewRecorder()
@@ -180,6 +176,40 @@ func TestGetURLMapping_UnknownKeyReturnsNotFound(t *testing.T) {
 
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("GET /api/v1/short-urls/{shortKey} status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+}
+
+func TestCommandHandlerDoesNotServeRedirects(t *testing.T) {
+	service := &stubURLService{longURL: mustParseURL(t, "https://example.com")}
+	request := httptest.NewRequest(http.MethodGet, "/Ab12Cd3", nil)
+	response := httptest.NewRecorder()
+
+	NewCommandHandler(service, testShortURLBase).ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("command handler redirect status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+}
+
+func TestRedirectHandlerDoesNotServeCommands(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/short-urls", bytes.NewBufferString(`{"user_id":"user-1","url":"https://example.com"}`))
+	response := httptest.NewRecorder()
+
+	NewRedirectHandler(&stubURLService{}).ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("redirect handler command status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+}
+
+func TestRedirectHandlerDoesNotServeManagementAPI(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/short-urls/Ab12Cd3", nil)
+	response := httptest.NewRecorder()
+
+	NewRedirectHandler(&stubURLService{}).ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("redirect handler management status = %d, want %d", response.Code, http.StatusNotFound)
 	}
 }
 

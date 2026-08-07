@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"testing"
+	"time"
 
 	"kyoku.dev/system-design-playground/tiny_url_shortener/internal/handler"
 )
@@ -53,6 +54,37 @@ func shorten(t *testing.T, service handler.URLService, userID, rawURL string) (s
 		t.Fatalf("GetShortURL() returned an unexpected error: %v", err)
 	}
 	return shortKey, created
+}
+
+func TestGetURLMapping_DoesNotRecordPublicVisit(t *testing.T) {
+	repository := NewMemoryRepository()
+	service := NewWithClock(repository, NewRandomKeyGenerator(), func() time.Time {
+		return time.Date(2026, time.August, 9, 12, 0, 0, 0, time.UTC)
+	})
+	mapping := URLMapping{
+		ShortKey:       testShortKey,
+		LongURL:        parseURL(t, "https://example.com/path"),
+		CreatorUserID:  "user-1",
+		LastAccessedAt: time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC),
+	}
+	if err := repository.Save(context.Background(), mapping); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	got, err := service.GetURLMapping(testShortKey)
+	if err != nil {
+		t.Fatalf("GetURLMapping() error = %v", err)
+	}
+	if got.String() != mapping.LongURL.String() {
+		t.Fatalf("GetURLMapping() = %q, want %q", got, mapping.LongURL)
+	}
+	statistics, err := repository.Statistics(context.Background(), testShortKey)
+	if err != nil {
+		t.Fatalf("Statistics() error = %v", err)
+	}
+	if statistics.Visits != 0 {
+		t.Fatalf("visits = %d, want 0", statistics.Visits)
+	}
 }
 
 // 아래 테스트는 README에 정의한 이 프로젝트의 설계를 검증한다.
