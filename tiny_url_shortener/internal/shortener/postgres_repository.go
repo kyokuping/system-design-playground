@@ -11,25 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const postgresSchema = `
-CREATE TABLE IF NOT EXISTS url_mappings (
-    short_key TEXT PRIMARY KEY CHECK (char_length(short_key) = 7),
-    normalized_url TEXT NOT NULL UNIQUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    visits BIGINT NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS url_owners (
-    user_id TEXT NOT NULL,
-    short_key TEXT NOT NULL REFERENCES url_mappings(short_key) ON DELETE CASCADE,
-    PRIMARY KEY (user_id, short_key)
-);
-CREATE TABLE IF NOT EXISTS id_allocators (
-    name TEXT PRIMARY KEY,
-    next_id BIGINT NOT NULL CHECK (next_id >= 0)
-);`
-
 type PostgresRepository struct{ pool *pgxpool.Pool }
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*PostgresRepository, error) {
@@ -54,8 +35,7 @@ func (r *PostgresRepository) Ping(ctx context.Context) error {
 	return r.pool.Ping(ctx)
 }
 func (r *PostgresRepository) EnsureSchema(ctx context.Context) error {
-	_, err := r.pool.Exec(ctx, postgresSchema)
-	return err
+	return migratePostgres(ctx, r.pool)
 }
 
 func (r *PostgresRepository) Save(ctx context.Context, mapping URLMapping) error {
