@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -64,10 +65,17 @@ func (h *URLHandler) shorten(response http.ResponseWriter, request *http.Request
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 1<<20))
 	decoder.DisallowUnknownFields()
+	// Decode the first JSON value into the body struct.
 	if err := decoder.Decode(&body); err != nil {
 		http.Error(response, "invalid JSON request", http.StatusBadRequest)
 		return
 	}
+	// Verify there is no trailing data. Decoding into an empty struct, should reach the end of the stream.
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		http.Error(response, "invalid JSON request", http.StatusBadRequest)
+		return
+	}
+
 	trimmedURL := strings.TrimSpace(body.URL)
 	parsed, err := url.Parse(trimmedURL)
 	if err != nil {
