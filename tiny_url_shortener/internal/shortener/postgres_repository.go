@@ -39,7 +39,7 @@ func (r *PostgresRepository) EnsureSchema(ctx context.Context) error {
 }
 
 func (r *PostgresRepository) Save(ctx context.Context, mapping URLMapping) error {
-	_, err := r.pool.Exec(ctx, `INSERT INTO url_mappings (short_key, normalized_url, last_accessed_at) VALUES ($1,$2,$3)`, mapping.ShortKey, mapping.LongURL.String(), mapping.LastAccessedAt)
+	_, err := r.pool.Exec(ctx, `INSERT INTO url_mappings (short_key, normalized_url, creator_user_id, last_accessed_at) VALUES ($1,$2,$3,$4)`, mapping.ShortKey, mapping.LongURL.String(), mapping.CreatorUserID, mapping.LastAccessedAt)
 	var postgresError *pgconn.PgError
 	if errors.As(err, &postgresError) && postgresError.Code == "23505" {
 		return ErrShortURLConflict
@@ -53,7 +53,7 @@ func (r *PostgresRepository) SaveWithOwner(ctx context.Context, mapping URLMappi
 		return err
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
-	if _, err = transaction.Exec(ctx, `INSERT INTO url_mappings (short_key, normalized_url, last_accessed_at) VALUES ($1,$2,$3)`, mapping.ShortKey, mapping.LongURL.String(), mapping.LastAccessedAt); err == nil {
+	if _, err = transaction.Exec(ctx, `INSERT INTO url_mappings (short_key, normalized_url, creator_user_id, last_accessed_at) VALUES ($1,$2,$3,$4)`, mapping.ShortKey, mapping.LongURL.String(), owner.UserID, mapping.LastAccessedAt); err == nil {
 		_, err = transaction.Exec(ctx, `INSERT INTO url_owners (user_id, short_key) VALUES ($1,$2)`, owner.UserID, owner.ShortKey)
 	}
 	var postgresError *pgconn.PgError
@@ -90,10 +90,10 @@ func (r *PostgresRepository) AddOwner(ctx context.Context, owner URLOwnership) e
 }
 
 func (r *PostgresRepository) FindByShortKey(ctx context.Context, shortKey string) (URLMapping, error) {
-	return scanMapping(r.pool.QueryRow(ctx, `SELECT short_key, normalized_url, last_accessed_at FROM url_mappings WHERE short_key=$1`, shortKey))
+	return scanMapping(r.pool.QueryRow(ctx, `SELECT short_key, normalized_url, creator_user_id, last_accessed_at FROM url_mappings WHERE short_key=$1`, shortKey))
 }
 func (r *PostgresRepository) FindByLongURL(ctx context.Context, longURL *url.URL) (URLMapping, error) {
-	return scanMapping(r.pool.QueryRow(ctx, `SELECT short_key, normalized_url, last_accessed_at FROM url_mappings WHERE normalized_url=$1`, longURL.String()))
+	return scanMapping(r.pool.QueryRow(ctx, `SELECT short_key, normalized_url, creator_user_id, last_accessed_at FROM url_mappings WHERE normalized_url=$1`, longURL.String()))
 }
 
 type rowScanner interface{ Scan(...any) error }
@@ -101,7 +101,7 @@ type rowScanner interface{ Scan(...any) error }
 func scanMapping(row rowScanner) (URLMapping, error) {
 	var mapping URLMapping
 	var rawURL string
-	if err := row.Scan(&mapping.ShortKey, &rawURL, &mapping.LastAccessedAt); errors.Is(err, pgx.ErrNoRows) {
+	if err := row.Scan(&mapping.ShortKey, &rawURL, &mapping.CreatorUserID, &mapping.LastAccessedAt); errors.Is(err, pgx.ErrNoRows) {
 		return URLMapping{}, ErrURLMappingNotFound
 	} else if err != nil {
 		return URLMapping{}, err
@@ -130,7 +130,7 @@ func (r *PostgresRepository) Statistics(ctx context.Context, shortKey string) (U
 	return statistics, err
 }
 func (r *PostgresRepository) Update(ctx context.Context, userID, shortKey string, longURL *url.URL) error {
-	result, err := r.pool.Exec(ctx, `UPDATE url_mappings m SET normalized_url=$3,updated_at=now() WHERE m.short_key=$2 AND EXISTS(SELECT 1 FROM url_owners o WHERE o.user_id=$1 AND o.short_key=m.short_key)`, userID, shortKey, longURL.String())
+	result, err := r.pool.Exec(ctx, `UPDATE url_mappings SET normalized_url=$3,updated_at=now() WHERE short_key=$2 AND creator_user_id=$1`, userID, shortKey, longURL.String())
 	var postgresError *pgconn.PgError
 	if errors.As(err, &postgresError) && postgresError.Code == "23505" {
 		return ErrShortURLConflict
@@ -144,7 +144,7 @@ func (r *PostgresRepository) Update(ctx context.Context, userID, shortKey string
 	return nil
 }
 func (r *PostgresRepository) Delete(ctx context.Context, userID, shortKey string) error {
-	result, err := r.pool.Exec(ctx, `DELETE FROM url_mappings m WHERE m.short_key=$2 AND EXISTS(SELECT 1 FROM url_owners o WHERE o.user_id=$1 AND o.short_key=m.short_key)`, userID, shortKey)
+	result, err := r.pool.Exec(ctx, `DELETE FROM url_mappings WHERE short_key=$2 AND creator_user_id=$1`, userID, shortKey)
 	if err != nil {
 		return err
 	}
@@ -154,14 +154,14 @@ func (r *PostgresRepository) Delete(ctx context.Context, userID, shortKey string
 	return nil
 }
 func (r *PostgresRepository) missingOrForbidden(ctx context.Context, userID, shortKey string) error {
-	var mapping, owner bool
-	if err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM url_mappings WHERE short_key=$1), EXISTS(SELECT 1 FROM url_owners WHERE user_id=$2 AND short_key=$1)`, shortKey, userID).Scan(&mapping, &owner); err != nil {
+	var mapping, creator bool
+	if err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM url_mappings WHERE short_key=$1), EXISTS(SELECT 1 FROM url_mappings WHERE short_key=$1 AND creator_user_id=$2)`, shortKey, userID).Scan(&mapping, &creator); err != nil {
 		return err
 	}
 	if !mapping {
 		return ErrURLMappingNotFound
 	}
-	if !owner {
+	if !creator {
 		return ErrForbidden
 	}
 	return nil

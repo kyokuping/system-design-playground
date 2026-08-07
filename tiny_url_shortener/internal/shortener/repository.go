@@ -23,6 +23,7 @@ var (
 type URLMapping struct {
 	ShortKey       string
 	LongURL        *url.URL
+	CreatorUserID  string
 	LastAccessedAt time.Time
 }
 

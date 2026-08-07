@@ -48,6 +48,7 @@ func (r *MemoryRepository) SaveWithOwner(_ context.Context, mapping URLMapping, 
 		return ErrShortURLConflict
 	}
 	copy := mapping
+	copy.CreatorUserID = owner.UserID
 	copy.LongURL = cloneURL(mapping.LongURL)
 	r.byKey[mapping.ShortKey] = &memoryRecord{mapping: copy}
 	r.byURL[mapping.LongURL.String()] = mapping.ShortKey
@@ -115,7 +116,7 @@ func (r *MemoryRepository) Update(_ context.Context, userID, key string, longURL
 	if !exists {
 		return ErrURLMappingNotFound
 	}
-	if _, owned := r.owners[key][userID]; !owned {
+	if record.mapping.CreatorUserID != userID {
 		return ErrForbidden
 	}
 	if existing, duplicate := r.byURL[longURL.String()]; duplicate && existing != key {
@@ -134,7 +135,7 @@ func (r *MemoryRepository) Delete(_ context.Context, userID, key string) error {
 	if !exists {
 		return ErrURLMappingNotFound
 	}
-	if _, owned := r.owners[key][userID]; !owned {
+	if record.mapping.CreatorUserID != userID {
 		return ErrForbidden
 	}
 	delete(r.byURL, record.mapping.LongURL.String())

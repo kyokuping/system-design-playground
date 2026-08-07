@@ -46,17 +46,12 @@ func (r *CachedRepository) Save(ctx context.Context, mapping URLMapping) error {
 }
 
 func (r *CachedRepository) SaveWithOwner(ctx context.Context, mapping URLMapping, owner URLOwnership) error {
-	if creator, ok := r.source.(URLMappingCreator); ok {
-		if err := creator.SaveWithOwner(ctx, mapping, owner); err != nil {
-			return err
-		}
-	} else {
-		if err := r.source.Save(ctx, mapping); err != nil {
-			return err
-		}
-		if err := r.source.AddOwner(ctx, owner); err != nil {
-			return err
-		}
+	creator, ok := r.source.(URLMappingCreator)
+	if !ok {
+		return ErrOperationNotSupported
+	}
+	if err := creator.SaveWithOwner(ctx, mapping, owner); err != nil {
+		return err
 	}
 	_ = r.cache.SetPositive(ctx, mapping, r.positiveTTL)
 	return nil

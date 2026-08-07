@@ -65,7 +65,7 @@ func (s *Shortener) GetShortURL(userID string, longURL *url.URL) (string, bool, 
 		if generateErr != nil {
 			return "", false, errors.Join(ErrKeyGenerationFailed, generateErr)
 		}
-		mapping := URLMapping{ShortKey: shortKey, LongURL: normalized, LastAccessedAt: s.now()}
+		mapping := URLMapping{ShortKey: shortKey, LongURL: normalized, CreatorUserID: userID, LastAccessedAt: s.now()}
 		ownership := URLOwnership{UserID: userID, ShortKey: shortKey}
 		if saveErr := s.saveWithOwner(ctx, mapping, ownership); saveErr == nil {
 			return shortKey, true, nil
@@ -153,11 +153,9 @@ func (s *Shortener) GetCustomShortURL(userID string, longURL *url.URL, customKey
 	} else if !errors.Is(findErr, ErrURLMappingNotFound) {
 		return "", false, findErr
 	}
-	mapping := URLMapping{ShortKey: customKey, LongURL: normalized, LastAccessedAt: s.now()}
-	if err := s.repository.Save(ctx, mapping); err != nil {
-		return "", false, err
-	}
-	if err := s.repository.AddOwner(ctx, URLOwnership{UserID: userID, ShortKey: customKey}); err != nil {
+	mapping := URLMapping{ShortKey: customKey, LongURL: normalized, CreatorUserID: userID, LastAccessedAt: s.now()}
+	ownership := URLOwnership{UserID: userID, ShortKey: customKey}
+	if err := s.saveWithOwner(ctx, mapping, ownership); err != nil {
 		return "", false, err
 	}
 	return customKey, true, nil

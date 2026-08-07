@@ -205,6 +205,9 @@ func TestGetShortURL_AtomicallySavesMappingAndFirstOwner(t *testing.T) {
 	if repository.saveCalls != 0 || repository.ownerCalls != 0 {
 		t.Fatalf("non-transactional calls = save %d, owner %d", repository.saveCalls, repository.ownerCalls)
 	}
+	if repository.creatorUserID != testUserID {
+		t.Fatalf("creator user ID = %q, want %q", repository.creatorUserID, testUserID)
+	}
 }
 
 func TestGetShortURL_NormalizesEquivalentURLs(t *testing.T) {
@@ -336,6 +339,27 @@ func TestUpdateLongURL_CreatorCanUpdateMapping(t *testing.T) {
 	}
 }
 
+func TestUpdateLongURL_SharedOwnerCannotUpdateMapping(t *testing.T) {
+	service := newFutureShortener()
+	shortKey, _ := shorten(t, service, "creator", "https://example.com/before")
+	sharedKey, _ := shorten(t, service, "shared-user", "https://example.com/before")
+	if sharedKey != shortKey {
+		t.Fatalf("shared key = %q, want %q", sharedKey, shortKey)
+	}
+
+	err := service.UpdateLongURL("shared-user", shortKey, parseURL(t, "https://example.com/after"))
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("UpdateLongURL() error = %v, want ErrForbidden", err)
+	}
+	got, err := service.GetLongURL(shortKey)
+	if err != nil {
+		t.Fatalf("GetLongURL() error = %v", err)
+	}
+	if got.String() != "https://example.com/before" {
+		t.Fatalf("GetLongURL() = %q, want original URL", got)
+	}
+}
+
 func TestDeleteURL_CreatorCanDeleteMapping(t *testing.T) {
 	skipExpectedFailure(t)
 
@@ -357,13 +381,32 @@ func TestDeleteURL_CreatorCanDeleteMapping(t *testing.T) {
 	}
 }
 
+func TestDeleteURL_SharedOwnerCannotDeleteMapping(t *testing.T) {
+	service := newFutureShortener()
+	shortKey, _ := shorten(t, service, "creator", "https://example.com/alpha")
+	shorten(t, service, "shared-user", "https://example.com/alpha")
+
+	err := service.DeleteURL("shared-user", shortKey)
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("DeleteURL() error = %v, want ErrForbidden", err)
+	}
+	if _, err := service.GetLongURL(shortKey); err != nil {
+		t.Fatalf("GetLongURL() error = %v, want mapping to remain", err)
+	}
+}
+
 type ownershipRepository struct {
 	byShortKey map[string]URLMapping
 	byLongURL  map[string]URLMapping
 	owners     map[string]map[string]bool
 }
 
-type transactionalCreationRepository struct{ transactionCalls, saveCalls, ownerCalls int }
+type transactionalCreationRepository struct {
+	transactionCalls int
+	saveCalls        int
+	ownerCalls       int
+	creatorUserID    string
+}
 
 func (r *transactionalCreationRepository) Save(context.Context, URLMapping) error {
 	r.saveCalls++
@@ -379,8 +422,9 @@ func (*transactionalCreationRepository) FindByShortKey(context.Context, string) 
 func (*transactionalCreationRepository) FindByLongURL(context.Context, *url.URL) (URLMapping, error) {
 	return URLMapping{}, ErrURLMappingNotFound
 }
-func (r *transactionalCreationRepository) SaveWithOwner(context.Context, URLMapping, URLOwnership) error {
+func (r *transactionalCreationRepository) SaveWithOwner(_ context.Context, mapping URLMapping, _ URLOwnership) error {
 	r.transactionCalls++
+	r.creatorUserID = mapping.CreatorUserID
 	return nil
 }
 
