@@ -22,16 +22,17 @@ type futureURLServiceContract interface {
 }
 
 func newShortener() handler.URLService {
-	panic("TODO: wire the Shortener implementation")
+	repository := NewMemoryRepository()
+	return New(repository, NewRandomKeyGenerator())
 }
 
 func newFutureShortener() futureURLServiceContract {
-	panic("TODO: wire the future Shortener implementation")
+	repository := NewMemoryRepository()
+	return New(repository, NewRandomKeyGenerator())
 }
 
 func skipExpectedFailure(t *testing.T) {
 	t.Helper()
-	t.Skip("TODO: expected failure until the Shortener behavior is implemented")
 }
 
 func parseURL(t *testing.T, rawURL string) *url.URL {

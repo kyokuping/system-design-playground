@@ -2,6 +2,7 @@ package shortener
 
 import (
 	"errors"
+	"net/url"
 	"testing"
 	"time"
 
@@ -9,7 +10,22 @@ import (
 )
 
 func newExpiringShortener(lastAccessedAt, now time.Time) handler.URLService {
-	panic("TODO: wire the Shortener with an injectable clock")
+	repository := NewMemoryRepository()
+	repository.byKey[testShortKey] = &memoryRecord{mapping: URLMapping{
+		ShortKey:       testShortKey,
+		LongURL:        parseURLForExpiration("https://example.com/alpha"),
+		LastAccessedAt: lastAccessedAt,
+	}}
+	repository.byURL["https://example.com/alpha"] = testShortKey
+	return NewWithClock(repository, NewRandomKeyGenerator(), func() time.Time { return now })
+}
+
+func parseURLForExpiration(rawURL string) *url.URL {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
 }
 
 func TestGetLongURL_BeforeExpirationReturnsOriginalURL(t *testing.T) {

@@ -17,14 +17,14 @@ type keyGeneratorContract interface {
 }
 
 func newBase62KeyGenerator() keyGeneratorContract {
-	panic("TODO: wire the Base62 key generator")
+	return NewRandomKeyGenerator()
 }
 
 func newShortenerWithDependencies(
 	repository URLRepository,
 	generator keyGeneratorContract,
 ) handler.URLService {
-	panic("TODO: wire the Shortener dependencies")
+	return New(repository, generator)
 }
 
 func TestKeyGenerator_GeneratesFixedLengthBase62Key(t *testing.T) {

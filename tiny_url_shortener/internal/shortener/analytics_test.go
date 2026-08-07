@@ -13,7 +13,7 @@ type analyticsServiceContract interface {
 }
 
 func newAnalyticsShortener() analyticsServiceContract {
-	panic("TODO: wire the Shortener analytics implementation")
+	return New(NewMemoryRepository(), NewRandomKeyGenerator())
 }
 
 func TestGetLongURL_IncrementsVisitCount(t *testing.T) {

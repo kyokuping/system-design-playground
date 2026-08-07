@@ -11,10 +11,7 @@ const (
 	maxBase62ID     uint64 = 3_521_614_606_207 // 62^7 - 1
 )
 
-type idRange struct {
-	Start uint64
-	End   uint64 // exclusive
-}
+type idRange = IDRange
 
 type rangeAllocatorContract interface {
 	Allocate(ctx context.Context, size uint64) (idRange, error)
@@ -28,23 +25,21 @@ type base62EncoderContract interface {
 	Encode(id uint64) (string, error)
 }
 
-type allocatorState struct {
-	NextID uint64
-}
+type allocatorState = MemoryAllocatorState
 
-func newRangeAllocator(_ *allocatorState) rangeAllocatorContract {
-	return unimplementedRangeAllocator{}
+func newRangeAllocator(state *allocatorState) rangeAllocatorContract {
+	return NewMemoryRangeAllocator(state)
 }
 
 func newDistributedIDGenerator(
-	_ rangeAllocatorContract,
-	_ uint64,
+	allocator rangeAllocatorContract,
+	rangeSize uint64,
 ) distributedIDGeneratorContract {
-	return unimplementedDistributedIDGenerator{}
+	return NewDistributedIDGenerator(allocator, rangeSize)
 }
 
 func newBase62Encoder() base62EncoderContract {
-	return unimplementedBase62Encoder{}
+	return NewBase62Encoder()
 }
 
 func TestRangeAllocator_ReturnsNonOverlappingRanges(t *testing.T) {
@@ -223,22 +218,4 @@ func (a *sequenceRangeAllocator) Allocate(_ context.Context, _ uint64) (idRange,
 	allocated := a.ranges[a.calls]
 	a.calls++
 	return allocated, nil
-}
-
-type unimplementedRangeAllocator struct{}
-
-func (unimplementedRangeAllocator) Allocate(context.Context, uint64) (idRange, error) {
-	panic("TODO: wire the range allocator implementation")
-}
-
-type unimplementedDistributedIDGenerator struct{}
-
-func (unimplementedDistributedIDGenerator) NextID(context.Context) (uint64, error) {
-	panic("TODO: wire the distributed ID generator implementation")
-}
-
-type unimplementedBase62Encoder struct{}
-
-func (unimplementedBase62Encoder) Encode(uint64) (string, error) {
-	panic("TODO: wire the Base62 encoder implementation")
 }

@@ -13,15 +13,12 @@ import (
 
 const testShortURLBase = "https://tiny.url"
 
-func wireTestHandler(_ URLService, _ string) http.Handler {
-	return http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		panic("TODO: wire the HTTP handler implementation")
-	})
+func wireTestHandler(service URLService, baseURL string) http.Handler {
+	return NewURLHandler(service, baseURL)
 }
 
 func skipExpectedFailure(t *testing.T) {
 	t.Helper()
-	t.Skip("TODO: expected failure until the HTTP handler behavior is implemented")
 }
 
 func TestPostShorten_NewMappingReturnsCreatedAndShortURL(t *testing.T) {
