@@ -38,6 +38,22 @@ func (r *MemoryRepository) Save(_ context.Context, mapping URLMapping) error {
 	r.byURL[mapping.LongURL.String()] = mapping.ShortKey
 	return nil
 }
+func (r *MemoryRepository) SaveWithOwner(_ context.Context, mapping URLMapping, owner URLOwnership) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.byKey[mapping.ShortKey]; exists {
+		return ErrShortURLConflict
+	}
+	if _, exists := r.byURL[mapping.LongURL.String()]; exists {
+		return ErrShortURLConflict
+	}
+	copy := mapping
+	copy.LongURL = cloneURL(mapping.LongURL)
+	r.byKey[mapping.ShortKey] = &memoryRecord{mapping: copy}
+	r.byURL[mapping.LongURL.String()] = mapping.ShortKey
+	r.owners[mapping.ShortKey] = map[string]struct{}{owner.UserID: {}}
+	return nil
+}
 func (r *MemoryRepository) AddOwner(_ context.Context, owner URLOwnership) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

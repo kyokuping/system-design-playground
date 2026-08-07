@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -39,14 +41,86 @@ func TestConfiguredRangeSizeRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+func TestConfiguredServerRole(t *testing.T) {
+	testCases := []struct {
+		value string
+		want  serverRole
+	}{
+		{value: "", want: roleAll},
+		{value: "COMMAND", want: roleCommand},
+		{value: " redirect ", want: roleRedirect},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.value, func(t *testing.T) {
+			t.Setenv("SERVER_ROLE", testCase.value)
+			got, err := configuredServerRole()
+			if err != nil {
+				t.Fatalf("configuredServerRole() error = %v", err)
+			}
+			if got != testCase.want {
+				t.Fatalf("configuredServerRole() = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestConfiguredServerRoleRejectsUnknownRole(t *testing.T) {
+	t.Setenv("SERVER_ROLE", "worker")
+	if _, err := configuredServerRole(); err == nil {
+		t.Fatal("configuredServerRole() error = nil")
+	}
+}
+
+func TestRoleHandlersExposeOnlyTheirTrafficClass(t *testing.T) {
+	probe := func(context.Context) error { return nil }
+
+	commandResponse := httptest.NewRecorder()
+	roleHandler(roleCommand, nil, "https://tiny.url", probe).ServeHTTP(
+		commandResponse,
+		httptest.NewRequest(http.MethodGet, "/Ab12Cd3", nil),
+	)
+	if commandResponse.Code != http.StatusNotFound {
+		t.Fatalf("command GET redirect status = %d, want %d", commandResponse.Code, http.StatusNotFound)
+	}
+
+	redirectResponse := httptest.NewRecorder()
+	roleHandler(roleRedirect, nil, "", probe).ServeHTTP(
+		redirectResponse,
+		httptest.NewRequest(http.MethodPost, "/api/v1/short-urls", nil),
+	)
+	if redirectResponse.Code != http.StatusNotFound {
+		t.Fatalf("redirect POST shorten status = %d, want %d", redirectResponse.Code, http.StatusNotFound)
+	}
+}
+
 func TestHealthzReturnsNoContent(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	response := httptest.NewRecorder()
+	probeCalled := false
 
-	newHandler().ServeHTTP(response, request)
+	rootHandler(nil, "", func(context.Context) error {
+		probeCalled = true
+		return nil
+	}).ServeHTTP(response, request)
 
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("GET /healthz status = %d, want %d", response.Code, http.StatusNoContent)
+	}
+	if !probeCalled {
+		t.Fatal("GET /healthz did not call readiness probe")
+	}
+}
+
+func TestHealthzReturnsServiceUnavailableWhenDependencyIsUnavailable(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	response := httptest.NewRecorder()
+
+	rootHandler(nil, "", func(context.Context) error {
+		return errors.New("postgres unavailable")
+	}).ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /healthz status = %d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
 }
 

@@ -38,6 +38,13 @@ type URLRepository interface {
 	FindByLongURL(ctx context.Context, longURL *url.URL) (URLMapping, error)
 }
 
+// URLMappingCreator lets durable repositories commit the mapping and its first
+// owner atomically. Shortener falls back to the base interface for simple test
+// repositories.
+type URLMappingCreator interface {
+	SaveWithOwner(ctx context.Context, mapping URLMapping, ownership URLOwnership) error
+}
+
 type URLAccessRecorder interface {
 	RecordAccess(ctx context.Context, shortKey string, at time.Time) error
 }
