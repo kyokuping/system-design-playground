@@ -6,6 +6,39 @@ import (
 	"testing"
 )
 
+func TestConfiguredRangeSizeUsesDefault(t *testing.T) {
+	t.Setenv("ID_RANGE_SIZE", "")
+	got, err := configuredRangeSize()
+	if err != nil {
+		t.Fatalf("configuredRangeSize() error = %v", err)
+	}
+	if got != 1_000 {
+		t.Fatalf("configuredRangeSize() = %d, want 1000", got)
+	}
+}
+
+func TestConfiguredRangeSizeReadsEnvironment(t *testing.T) {
+	t.Setenv("ID_RANGE_SIZE", "250")
+	got, err := configuredRangeSize()
+	if err != nil {
+		t.Fatalf("configuredRangeSize() error = %v", err)
+	}
+	if got != 250 {
+		t.Fatalf("configuredRangeSize() = %d, want 250", got)
+	}
+}
+
+func TestConfiguredRangeSizeRejectsInvalidValue(t *testing.T) {
+	for _, value := range []string{"0", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("ID_RANGE_SIZE", value)
+			if _, err := configuredRangeSize(); err == nil {
+				t.Fatal("configuredRangeSize() error = nil")
+			}
+		})
+	}
+}
+
 func TestHealthzReturnsNoContent(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	response := httptest.NewRecorder()
