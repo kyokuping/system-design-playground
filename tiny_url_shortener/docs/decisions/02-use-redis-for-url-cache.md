@@ -6,7 +6,7 @@
   - [Tiny URL Shortener Design](../design.md)
   - [01. Use PostgreSQL as the Source of Truth for URL Mappings](01-use-postgresql-as-source-of-truth.md)
   - [05. Prefer Positive Cache Entries with Conditional Negative Caching](05-prioritize-positive-cache-over-negative-cache.md)
-  - [06. Preserve Expiration Metadata in the URL Cache](06-preserve-expiration-metadata-in-url-cache.md)
+  - [06. Preserve Expiration and Version Metadata in the URL Cache](06-preserve-expiration-metadata-in-url-cache.md)
 
 > The Redis selection and cache-aside decision remain valid. ADR 05 supersedes
 > the initial cache-value format, creation-time invalidation, and negative-cache

@@ -105,6 +105,24 @@ func TestCachedRepository_SaveWritesPositiveCache(t *testing.T) {
 	}
 }
 
+func TestCachedRepository_SaveDoesNotReadRevisionAwareSourceThatKeepsRevision(t *testing.T) {
+	source := &revisionedCountingRepository{}
+	repository := NewCachedRepository(source, &stubURLCache{}, time.Hour, 30*time.Second)
+	mapping := URLMapping{
+		ShortKey:       "Ab12Cd3",
+		LongURL:        mustCacheURL(t, "https://example.com/created"),
+		LastAccessedAt: time.Now(),
+		Revision:       1,
+	}
+
+	if err := repository.Save(context.Background(), mapping); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if source.findCalls != 0 {
+		t.Fatalf("source reads = %d, want 0", source.findCalls)
+	}
+}
+
 func TestCachedRepository_LateNegativeCannotOverwriteCreatedMapping(t *testing.T) {
 	findStarted := make(chan struct{})
 	continueFind := make(chan struct{})
@@ -195,6 +213,66 @@ func TestCachedRepository_RecordAccessRefreshesCachedExpiration(t *testing.T) {
 	}
 }
 
+func TestCachedRepository_ConcurrentReadCannotRepopulateUpdatedMapping(t *testing.T) {
+	oldURL := mustCacheURL(t, "https://example.com/old")
+	newURL := mustCacheURL(t, "https://example.com/new")
+	source := newRacingMutableRepository(URLMapping{
+		ShortKey: "Ab12Cd3", LongURL: oldURL, CreatorUserID: "user-1",
+		LastAccessedAt: time.Now(), Revision: 1,
+	})
+	cache := &orderedURLCache{}
+	repository := NewCachedRepository(source, cache, time.Hour, 30*time.Second)
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := repository.FindByShortKey(context.Background(), "Ab12Cd3")
+		readDone <- err
+	}()
+	<-source.findStarted
+	if err := repository.Update(context.Background(), "user-1", "Ab12Cd3", newURL); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	close(source.continueFind)
+	if err := <-readDone; err != nil {
+		t.Fatalf("FindByShortKey() error = %v", err)
+	}
+
+	mapping, err := repository.FindByShortKey(context.Background(), "Ab12Cd3")
+	if err != nil {
+		t.Fatalf("FindByShortKey() after update error = %v", err)
+	}
+	if got := mapping.LongURL.String(); got != newURL.String() {
+		t.Fatalf("URL after update = %q, want %q", got, newURL)
+	}
+}
+
+func TestCachedRepository_ConcurrentReadCannotRepopulateDeletedMapping(t *testing.T) {
+	source := newRacingMutableRepository(URLMapping{
+		ShortKey: "Ab12Cd3", LongURL: mustCacheURL(t, "https://example.com/deleted"), CreatorUserID: "user-1",
+		LastAccessedAt: time.Now(), Revision: 1,
+	})
+	cache := &orderedURLCache{}
+	repository := NewCachedRepository(source, cache, time.Hour, 30*time.Second)
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := repository.FindByShortKey(context.Background(), "Ab12Cd3")
+		readDone <- err
+	}()
+	<-source.findStarted
+	if err := repository.Delete(context.Background(), "user-1", "Ab12Cd3"); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	close(source.continueFind)
+	if err := <-readDone; err != nil {
+		t.Fatalf("in-flight FindByShortKey() error = %v", err)
+	}
+
+	if _, err := repository.FindByShortKey(context.Background(), "Ab12Cd3"); !errors.Is(err, ErrURLMappingNotFound) {
+		t.Fatalf("FindByShortKey() after delete error = %v, want ErrURLMappingNotFound", err)
+	}
+}
+
 type stubURLCache struct {
 	cached      CachedURL
 	getErr      error
@@ -219,6 +297,10 @@ func (c *stubURLCache) Delete(context.Context, string) error {
 	c.deleteCalls++
 	return c.setErr
 }
+func (c *stubURLCache) Invalidate(context.Context, string, int64, time.Duration) error {
+	c.deleteCalls++
+	return c.setErr
+}
 
 type countingRepository struct {
 	mapping      URLMapping
@@ -226,6 +308,15 @@ type countingRepository struct {
 	findCalls    int
 	findStarted  chan struct{}
 	continueFind chan struct{}
+}
+
+type revisionedCountingRepository struct{ countingRepository }
+
+func (*revisionedCountingRepository) UpdateWithRevision(context.Context, string, string, *url.URL) (URLMapping, error) {
+	return URLMapping{}, nil
+}
+func (*revisionedCountingRepository) DeleteWithRevision(context.Context, string, string) (int64, error) {
+	return 0, nil
 }
 
 func (*countingRepository) Save(context.Context, URLMapping) error       { return nil }
@@ -243,9 +334,10 @@ func (r *countingRepository) FindByShortKey(context.Context, string) (URLMapping
 }
 
 type orderedURLCache struct {
-	mu    sync.Mutex
-	entry CachedURL
-	set   bool
+	mu       sync.Mutex
+	entry    CachedURL
+	set      bool
+	revision int64
 }
 
 func (c *orderedURLCache) Get(context.Context, string) (CachedURL, error) {
@@ -260,7 +352,11 @@ func (c *orderedURLCache) Get(context.Context, string) (CachedURL, error) {
 func (c *orderedURLCache) SetPositive(_ context.Context, mapping URLMapping, _ time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entry = CachedURL{LongURL: mapping.LongURL.String(), LastAccessedAt: mapping.LastAccessedAt}
+	if c.revision > mapping.Revision {
+		return nil
+	}
+	c.revision = mapping.Revision
+	c.entry = CachedURL{LongURL: mapping.LongURL.String(), LastAccessedAt: mapping.LastAccessedAt, Revision: mapping.Revision}
 	c.set = true
 	return nil
 }
@@ -283,8 +379,77 @@ func (c *orderedURLCache) Delete(context.Context, string) error {
 	c.set = false
 	return nil
 }
+func (c *orderedURLCache) Invalidate(_ context.Context, _ string, revision int64, _ time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.revision > revision {
+		return nil
+	}
+	c.entry = CachedURL{}
+	c.set = false
+	c.revision = revision
+	return nil
+}
 func (*countingRepository) FindByLongURL(context.Context, *url.URL) (URLMapping, error) {
 	return URLMapping{}, ErrURLMappingNotFound
+}
+
+type racingMutableRepository struct {
+	mu           sync.Mutex
+	mapping      URLMapping
+	deleted      bool
+	blockFind    bool
+	findStarted  chan struct{}
+	continueFind chan struct{}
+}
+
+func newRacingMutableRepository(mapping URLMapping) *racingMutableRepository {
+	return &racingMutableRepository{
+		mapping: mapping, blockFind: true,
+		findStarted: make(chan struct{}), continueFind: make(chan struct{}),
+	}
+}
+
+func (*racingMutableRepository) Save(context.Context, URLMapping) error { return nil }
+func (*racingMutableRepository) AddOwner(context.Context, URLOwnership) error {
+	return nil
+}
+func (r *racingMutableRepository) FindByShortKey(context.Context, string) (URLMapping, error) {
+	r.mu.Lock()
+	mapping, deleted, block := r.mapping, r.deleted, r.blockFind
+	r.blockFind = false
+	r.mu.Unlock()
+	if block {
+		close(r.findStarted)
+		<-r.continueFind
+	}
+	if deleted {
+		return URLMapping{}, ErrURLMappingNotFound
+	}
+	return mapping, nil
+}
+func (*racingMutableRepository) FindByLongURL(context.Context, *url.URL) (URLMapping, error) {
+	return URLMapping{}, ErrURLMappingNotFound
+}
+func (r *racingMutableRepository) Update(context.Context, string, string, *url.URL) error {
+	panic("UpdateWithRevision must be used")
+}
+func (r *racingMutableRepository) UpdateWithRevision(_ context.Context, _, _ string, longURL *url.URL) (URLMapping, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.mapping.LongURL = cloneURL(longURL)
+	r.mapping.Revision++
+	return r.mapping, nil
+}
+func (r *racingMutableRepository) Delete(context.Context, string, string) error {
+	panic("DeleteWithRevision must be used")
+}
+func (r *racingMutableRepository) DeleteWithRevision(context.Context, string, string) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deleted = true
+	r.mapping.Revision++
+	return r.mapping.Revision, nil
 }
 
 func mustCacheURL(t *testing.T, raw string) *url.URL {

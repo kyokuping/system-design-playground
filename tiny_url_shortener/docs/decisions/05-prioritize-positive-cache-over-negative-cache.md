@@ -6,7 +6,7 @@
   - [Tiny URL Shortener Design](../design.md)
   - [02. Use Redis for the URL Lookup Cache](02-use-redis-for-url-cache.md)
   - [03. Generate Short-URL IDs with a Distributed Counter](03-use-distributed-counter-for-url-ids.md)
-  - [06. Preserve Expiration Metadata in the URL Cache](06-preserve-expiration-metadata-in-url-cache.md)
+  - [06. Preserve Expiration and Version Metadata in the URL Cache](06-preserve-expiration-metadata-in-url-cache.md)
 
 ## Context
 

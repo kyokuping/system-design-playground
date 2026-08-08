@@ -13,6 +13,8 @@ import (
 
 type PostgresRepository struct{ pool *pgxpool.Pool }
 
+func (*PostgresRepository) AssignsRevisions() {}
+
 func OpenPostgres(ctx context.Context, databaseURL string) (*PostgresRepository, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
@@ -90,10 +92,10 @@ func (r *PostgresRepository) AddOwner(ctx context.Context, owner URLOwnership) e
 }
 
 func (r *PostgresRepository) FindByShortKey(ctx context.Context, shortKey string) (URLMapping, error) {
-	return scanMapping(r.pool.QueryRow(ctx, `SELECT short_key, normalized_url, creator_user_id, last_accessed_at FROM url_mappings WHERE short_key=$1`, shortKey))
+	return scanMapping(r.pool.QueryRow(ctx, `SELECT short_key, normalized_url, creator_user_id, last_accessed_at, revision FROM url_mappings WHERE short_key=$1`, shortKey))
 }
 func (r *PostgresRepository) FindByLongURL(ctx context.Context, longURL *url.URL) (URLMapping, error) {
-	return scanMapping(r.pool.QueryRow(ctx, `SELECT short_key, normalized_url, creator_user_id, last_accessed_at FROM url_mappings WHERE normalized_url=$1`, longURL.String()))
+	return scanMapping(r.pool.QueryRow(ctx, `SELECT short_key, normalized_url, creator_user_id, last_accessed_at, revision FROM url_mappings WHERE normalized_url=$1`, longURL.String()))
 }
 
 type rowScanner interface{ Scan(...any) error }
@@ -101,7 +103,7 @@ type rowScanner interface{ Scan(...any) error }
 func scanMapping(row rowScanner) (URLMapping, error) {
 	var mapping URLMapping
 	var rawURL string
-	if err := row.Scan(&mapping.ShortKey, &rawURL, &mapping.CreatorUserID, &mapping.LastAccessedAt); errors.Is(err, pgx.ErrNoRows) {
+	if err := row.Scan(&mapping.ShortKey, &rawURL, &mapping.CreatorUserID, &mapping.LastAccessedAt, &mapping.Revision); errors.Is(err, pgx.ErrNoRows) {
 		return URLMapping{}, ErrURLMappingNotFound
 	} else if err != nil {
 		return URLMapping{}, err
@@ -115,11 +117,11 @@ func scanMapping(row rowScanner) (URLMapping, error) {
 }
 
 func (r *PostgresRepository) RecordAccess(ctx context.Context, shortKey string, at time.Time) error {
-	result, err := r.pool.Exec(ctx, `UPDATE url_mappings SET visits=visits+1,last_accessed_at=$2,updated_at=$2 WHERE short_key=$1`, shortKey, at)
-	if err == nil && result.RowsAffected() == 0 {
-		return ErrURLMappingNotFound
-	}
+	_, err := r.RecordAccessWithRevision(ctx, shortKey, at)
 	return err
+}
+func (r *PostgresRepository) RecordAccessWithRevision(ctx context.Context, shortKey string, at time.Time) (URLMapping, error) {
+	return scanMapping(r.pool.QueryRow(ctx, `UPDATE url_mappings SET visits=visits+1,last_accessed_at=$2,updated_at=$2,revision=nextval('url_mapping_revision_seq') WHERE short_key=$1 RETURNING short_key,normalized_url,creator_user_id,last_accessed_at,revision`, shortKey, at))
 }
 func (r *PostgresRepository) Statistics(ctx context.Context, shortKey string) (URLStatistics, error) {
 	var statistics URLStatistics
@@ -130,28 +132,31 @@ func (r *PostgresRepository) Statistics(ctx context.Context, shortKey string) (U
 	return statistics, err
 }
 func (r *PostgresRepository) Update(ctx context.Context, userID, shortKey string, longURL *url.URL) error {
-	result, err := r.pool.Exec(ctx, `UPDATE url_mappings SET normalized_url=$3,updated_at=now() WHERE short_key=$2 AND creator_user_id=$1`, userID, shortKey, longURL.String())
+	_, err := r.UpdateWithRevision(ctx, userID, shortKey, longURL)
+	return err
+}
+func (r *PostgresRepository) UpdateWithRevision(ctx context.Context, userID, shortKey string, longURL *url.URL) (URLMapping, error) {
+	mapping, err := scanMapping(r.pool.QueryRow(ctx, `UPDATE url_mappings SET normalized_url=$3,updated_at=now(),last_accessed_at=now(),revision=nextval('url_mapping_revision_seq') WHERE short_key=$2 AND creator_user_id=$1 RETURNING short_key,normalized_url,creator_user_id,last_accessed_at,revision`, userID, shortKey, longURL.String()))
 	var postgresError *pgconn.PgError
 	if errors.As(err, &postgresError) && postgresError.Code == "23505" {
-		return ErrShortURLConflict
+		return URLMapping{}, ErrShortURLConflict
 	}
-	if err != nil {
-		return err
+	if errors.Is(err, ErrURLMappingNotFound) {
+		return URLMapping{}, r.missingOrForbidden(ctx, userID, shortKey)
 	}
-	if result.RowsAffected() == 0 {
-		return r.missingOrForbidden(ctx, userID, shortKey)
-	}
-	return nil
+	return mapping, err
 }
 func (r *PostgresRepository) Delete(ctx context.Context, userID, shortKey string) error {
-	result, err := r.pool.Exec(ctx, `DELETE FROM url_mappings WHERE short_key=$2 AND creator_user_id=$1`, userID, shortKey)
-	if err != nil {
-		return err
+	_, err := r.DeleteWithRevision(ctx, userID, shortKey)
+	return err
+}
+func (r *PostgresRepository) DeleteWithRevision(ctx context.Context, userID, shortKey string) (int64, error) {
+	var revision int64
+	err := r.pool.QueryRow(ctx, `DELETE FROM url_mappings WHERE short_key=$2 AND creator_user_id=$1 RETURNING nextval('url_mapping_revision_seq')`, userID, shortKey).Scan(&revision)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, r.missingOrForbidden(ctx, userID, shortKey)
 	}
-	if result.RowsAffected() == 0 {
-		return r.missingOrForbidden(ctx, userID, shortKey)
-	}
-	return nil
+	return revision, err
 }
 func (r *PostgresRepository) missingOrForbidden(ctx context.Context, userID, shortKey string) error {
 	var mapping, creator bool

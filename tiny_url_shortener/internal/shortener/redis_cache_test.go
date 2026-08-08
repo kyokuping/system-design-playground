@@ -11,6 +11,7 @@ func TestRedisCacheEntryRoundTripsExpirationMetadata(t *testing.T) {
 		State:          cacheStatePositive,
 		LongURL:        "https://example.com/created",
 		LastAccessedAt: time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC),
+		Revision:       42,
 	}
 	encoded, err := json.Marshal(want)
 	if err != nil {
@@ -20,17 +21,20 @@ func TestRedisCacheEntryRoundTripsExpirationMetadata(t *testing.T) {
 	if err := json.Unmarshal(encoded, &got); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
-	if got.State != want.State || got.LongURL != want.LongURL || !got.LastAccessedAt.Equal(want.LastAccessedAt) {
+	if got.State != want.State || got.LongURL != want.LongURL || !got.LastAccessedAt.Equal(want.LastAccessedAt) || got.Revision != want.Revision {
 		t.Fatalf("entry = %+v, want %+v", got, want)
 	}
 }
 
 func TestRedisURLKey_KeepsFirstCacheKeyVersion(t *testing.T) {
-	// The entry key carries a hash tag and a purpose suffix, so it never
-	// collides with the plain cache:url:v1:{shortKey} strings of the original
-	// format. An incompatible value format needs no key version bump.
+	// The keys carry a hash tag and a purpose suffix, so they never collide
+	// with the plain cache:url:v1:{shortKey} strings of the original format.
+	// An incompatible value format needs no key version bump.
 	if got, want := redisURLKey("abc123"), "cache:url:v1:{abc123}:entry"; got != want {
 		t.Fatalf("redisURLKey() = %q, want %q", got, want)
+	}
+	if got, want := redisURLRevisionKey("abc123"), "cache:url:v1:{abc123}:revision"; got != want {
+		t.Fatalf("redisURLRevisionKey() = %q, want %q", got, want)
 	}
 }
 
@@ -56,5 +60,12 @@ func TestCacheTTLJitterPreservesNonPositiveTTL(t *testing.T) {
 		if got := jitter(ttl); got != ttl {
 			t.Fatalf("jitter(%v) = %v", ttl, got)
 		}
+	}
+}
+
+func TestRevisionTTL_OutlivesPositiveEntryAndInFlightRead(t *testing.T) {
+	positiveTTL := time.Hour
+	if got := revisionTTL(positiveTTL); got <= positiveTTL+10*time.Second {
+		t.Fatalf("revisionTTL(%v) = %v, want more than entry TTL plus longest read", positiveTTL, got)
 	}
 }

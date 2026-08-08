@@ -12,6 +12,7 @@ var ErrCacheMiss = errors.New("cache miss")
 type CachedURL struct {
 	LongURL        string
 	LastAccessedAt time.Time
+	Revision       int64
 	Negative       bool
 }
 
@@ -22,6 +23,7 @@ type URLCache interface {
 	SetPositive(ctx context.Context, mapping URLMapping, ttl time.Duration) error
 	SetNegativeIfAbsent(ctx context.Context, shortKey string, ttl time.Duration) (bool, error)
 	Delete(ctx context.Context, shortKey string) error
+	Invalidate(ctx context.Context, shortKey string, revision int64, positiveTTL time.Duration) error
 }
 
 // CachedRepository applies cache-aside reads. Cache failures are best-effort:
@@ -41,6 +43,7 @@ func (r *CachedRepository) Save(ctx context.Context, mapping URLMapping) error {
 	if err := r.source.Save(ctx, mapping); err != nil {
 		return err
 	}
+	mapping = r.persistedMapping(ctx, mapping)
 	_ = r.cache.SetPositive(ctx, mapping, r.positiveTTL)
 	return nil
 }
@@ -53,6 +56,7 @@ func (r *CachedRepository) SaveWithOwner(ctx context.Context, mapping URLMapping
 	if err := creator.SaveWithOwner(ctx, mapping, owner); err != nil {
 		return err
 	}
+	mapping = r.persistedMapping(ctx, mapping)
 	_ = r.cache.SetPositive(ctx, mapping, r.positiveTTL)
 	return nil
 }
@@ -101,7 +105,19 @@ func mappingFromCache(shortKey string, cached CachedURL) (URLMapping, bool) {
 		ShortKey:       shortKey,
 		LongURL:        parsed,
 		LastAccessedAt: cached.LastAccessedAt,
+		Revision:       cached.Revision,
 	}, true
+}
+
+func (r *CachedRepository) persistedMapping(ctx context.Context, fallback URLMapping) URLMapping {
+	if _, ok := r.source.(RevisionedRepository); !ok {
+		return fallback
+	}
+	mapping, err := r.source.FindByShortKey(ctx, fallback.ShortKey)
+	if err != nil || mapping.LongURL == nil || mapping.Revision <= fallback.Revision {
+		return fallback
+	}
+	return mapping
 }
 
 func (r *CachedRepository) FindByLongURL(ctx context.Context, longURL *url.URL) (URLMapping, error) {
@@ -109,6 +125,16 @@ func (r *CachedRepository) FindByLongURL(ctx context.Context, longURL *url.URL) 
 }
 
 func (r *CachedRepository) RecordAccess(ctx context.Context, shortKey string, at time.Time) error {
+	if recorder, ok := r.source.(RevisionedAccessRecorder); ok {
+		mapping, err := recorder.RecordAccessWithRevision(ctx, shortKey, at)
+		if err != nil {
+			return err
+		}
+		if err := r.cache.SetPositive(ctx, mapping, r.positiveTTL); err != nil {
+			_ = r.cache.Invalidate(ctx, shortKey, mapping.Revision, r.positiveTTL)
+		}
+		return nil
+	}
 	recorder, ok := r.source.(URLAccessRecorder)
 	if !ok {
 		return nil
@@ -136,6 +162,16 @@ func (r *CachedRepository) Statistics(ctx context.Context, shortKey string) (URL
 }
 
 func (r *CachedRepository) Update(ctx context.Context, userID, shortKey string, longURL *url.URL) error {
+	if mutable, ok := r.source.(RevisionedMutableURLRepository); ok {
+		mapping, err := mutable.UpdateWithRevision(ctx, userID, shortKey, longURL)
+		if err != nil {
+			return err
+		}
+		if err := r.cache.SetPositive(ctx, mapping, r.positiveTTL); err != nil {
+			_ = r.cache.Invalidate(ctx, shortKey, mapping.Revision, r.positiveTTL)
+		}
+		return nil
+	}
 	mutable, ok := r.source.(MutableURLRepository)
 	if !ok {
 		return ErrOperationNotSupported
@@ -148,6 +184,14 @@ func (r *CachedRepository) Update(ctx context.Context, userID, shortKey string, 
 }
 
 func (r *CachedRepository) Delete(ctx context.Context, userID, shortKey string) error {
+	if mutable, ok := r.source.(RevisionedMutableURLRepository); ok {
+		revision, err := mutable.DeleteWithRevision(ctx, userID, shortKey)
+		if err != nil {
+			return err
+		}
+		_ = r.cache.Invalidate(ctx, shortKey, revision, r.positiveTTL)
+		return nil
+	}
 	mutable, ok := r.source.(MutableURLRepository)
 	if !ok {
 		return ErrOperationNotSupported

@@ -13,15 +13,18 @@ type memoryRecord struct {
 }
 
 type MemoryRepository struct {
-	mu     sync.RWMutex
-	byKey  map[string]*memoryRecord
-	byURL  map[string]string
-	owners map[string]map[string]struct{}
+	mu           sync.RWMutex
+	byKey        map[string]*memoryRecord
+	byURL        map[string]string
+	owners       map[string]map[string]struct{}
+	nextRevision int64
 }
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{byKey: map[string]*memoryRecord{}, byURL: map[string]string{}, owners: map[string]map[string]struct{}{}}
 }
+
+func (*MemoryRepository) AssignsRevisions() {}
 
 func (r *MemoryRepository) Save(_ context.Context, mapping URLMapping) error {
 	r.mu.Lock()
@@ -34,6 +37,7 @@ func (r *MemoryRepository) Save(_ context.Context, mapping URLMapping) error {
 	}
 	copy := mapping
 	copy.LongURL = cloneURL(mapping.LongURL)
+	copy.Revision = r.newRevision()
 	r.byKey[mapping.ShortKey] = &memoryRecord{mapping: copy}
 	r.byURL[mapping.LongURL.String()] = mapping.ShortKey
 	return nil
@@ -50,6 +54,7 @@ func (r *MemoryRepository) SaveWithOwner(_ context.Context, mapping URLMapping, 
 	copy := mapping
 	copy.CreatorUserID = owner.UserID
 	copy.LongURL = cloneURL(mapping.LongURL)
+	copy.Revision = r.newRevision()
 	r.byKey[mapping.ShortKey] = &memoryRecord{mapping: copy}
 	r.byURL[mapping.LongURL.String()] = mapping.ShortKey
 	r.owners[mapping.ShortKey] = map[string]struct{}{owner.UserID: {}}
@@ -90,15 +95,25 @@ func (r *MemoryRepository) FindByLongURL(_ context.Context, longURL *url.URL) (U
 	return result, nil
 }
 func (r *MemoryRepository) RecordAccess(_ context.Context, key string, at time.Time) error {
+	_, err := r.recordAccess(key, at)
+	return err
+}
+func (r *MemoryRepository) RecordAccessWithRevision(_ context.Context, key string, at time.Time) (URLMapping, error) {
+	return r.recordAccess(key, at)
+}
+func (r *MemoryRepository) recordAccess(key string, at time.Time) (URLMapping, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	record, exists := r.byKey[key]
 	if !exists {
-		return ErrURLMappingNotFound
+		return URLMapping{}, ErrURLMappingNotFound
 	}
 	record.visits++
 	record.mapping.LastAccessedAt = at
-	return nil
+	record.mapping.Revision = r.newRevision()
+	result := record.mapping
+	result.LongURL = cloneURL(result.LongURL)
+	return result, nil
 }
 func (r *MemoryRepository) Statistics(_ context.Context, key string) (URLStatistics, error) {
 	r.mu.RLock()
@@ -110,36 +125,58 @@ func (r *MemoryRepository) Statistics(_ context.Context, key string) (URLStatist
 	return URLStatistics{ShortKey: key, LongURL: record.mapping.LongURL.String(), Visits: record.visits}, nil
 }
 func (r *MemoryRepository) Update(_ context.Context, userID, key string, longURL *url.URL) error {
+	_, err := r.update(userID, key, longURL)
+	return err
+}
+func (r *MemoryRepository) UpdateWithRevision(_ context.Context, userID, key string, longURL *url.URL) (URLMapping, error) {
+	return r.update(userID, key, longURL)
+}
+func (r *MemoryRepository) update(userID, key string, longURL *url.URL) (URLMapping, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	record, exists := r.byKey[key]
 	if !exists {
-		return ErrURLMappingNotFound
+		return URLMapping{}, ErrURLMappingNotFound
 	}
 	if record.mapping.CreatorUserID != userID {
-		return ErrForbidden
+		return URLMapping{}, ErrForbidden
 	}
 	if existing, duplicate := r.byURL[longURL.String()]; duplicate && existing != key {
-		return ErrShortURLConflict
+		return URLMapping{}, ErrShortURLConflict
 	}
 	delete(r.byURL, record.mapping.LongURL.String())
 	record.mapping.LongURL = cloneURL(longURL)
 	record.mapping.LastAccessedAt = time.Now()
+	record.mapping.Revision = r.newRevision()
 	r.byURL[longURL.String()] = key
-	return nil
+	result := record.mapping
+	result.LongURL = cloneURL(result.LongURL)
+	return result, nil
 }
 func (r *MemoryRepository) Delete(_ context.Context, userID, key string) error {
+	_, err := r.delete(userID, key)
+	return err
+}
+func (r *MemoryRepository) DeleteWithRevision(_ context.Context, userID, key string) (int64, error) {
+	return r.delete(userID, key)
+}
+func (r *MemoryRepository) delete(userID, key string) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	record, exists := r.byKey[key]
 	if !exists {
-		return ErrURLMappingNotFound
+		return 0, ErrURLMappingNotFound
 	}
 	if record.mapping.CreatorUserID != userID {
-		return ErrForbidden
+		return 0, ErrForbidden
 	}
 	delete(r.byURL, record.mapping.LongURL.String())
 	delete(r.byKey, key)
 	delete(r.owners, key)
-	return nil
+	return r.newRevision(), nil
+}
+
+func (r *MemoryRepository) newRevision() int64 {
+	r.nextRevision++
+	return r.nextRevision
 }

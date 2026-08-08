@@ -25,6 +25,7 @@ type URLMapping struct {
 	LongURL        *url.URL
 	CreatorUserID  string
 	LastAccessedAt time.Time
+	Revision       int64
 }
 
 type URLOwnership struct {
@@ -46,6 +47,10 @@ type URLMappingCreator interface {
 	SaveWithOwner(ctx context.Context, mapping URLMapping, ownership URLOwnership) error
 }
 
+type RevisionedRepository interface {
+	AssignsRevisions()
+}
+
 type URLAccessRecorder interface {
 	RecordAccess(ctx context.Context, shortKey string, at time.Time) error
 }
@@ -57,4 +62,13 @@ type URLStatisticsRepository interface {
 type MutableURLRepository interface {
 	Update(ctx context.Context, userID, shortKey string, longURL *url.URL) error
 	Delete(ctx context.Context, userID, shortKey string) error
+}
+
+type RevisionedMutableURLRepository interface {
+	UpdateWithRevision(ctx context.Context, userID, shortKey string, longURL *url.URL) (URLMapping, error)
+	DeleteWithRevision(ctx context.Context, userID, shortKey string) (int64, error)
+}
+
+type RevisionedAccessRecorder interface {
+	RecordAccessWithRevision(ctx context.Context, shortKey string, at time.Time) (URLMapping, error)
 }
