@@ -175,7 +175,9 @@ Location: https://example.com/very/long/path
 ```
 
 단축 키가 존재하지 않으면 `404 Not Found`를, 단축 URL이 만료됐다면 `410 Gone`을
-반환한다.
+반환한다. API 경로와 응답에 대한 결정은
+[ADR 07. 공개 리다이렉트 경로와 관리 API를 분리한다](decisions/07-define-public-api-paths-and-responses.md)에
+기록한다.
 
 ## 아키텍처
 
