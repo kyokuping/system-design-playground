@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-const maxKeyCollisionRetries = 3
+const (
+	maxKeyCollisionRetries = 3
+	maxNormalizedURLBytes  = 2048
+)
 
 // KeyGenerator supplies a candidate seven-character Base62 key.
 type KeyGenerator interface {
@@ -128,6 +131,9 @@ func (s *Shortener) GetURLMapping(shortKey string) (*url.URL, error) {
 }
 
 func (s *Shortener) findActiveMapping(shortKey string) (URLMapping, error) {
+	if !validShortKey(shortKey) {
+		return URLMapping{}, ErrInvalidShortKey
+	}
 	ctx := context.Background()
 	mapping, err := s.repository.FindByShortKey(ctx, shortKey)
 	if err != nil {
@@ -233,6 +239,9 @@ func NormalizeURL(input *url.URL) (*url.URL, error) {
 		result.Path = "/"
 	}
 	result.Fragment = ""
+	if len(result.String()) > maxNormalizedURLBytes {
+		return nil, ErrInvalidURL
+	}
 	return result, nil
 }
 
