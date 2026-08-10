@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go vet *)",
+      "Bash(go test *)",
+      "Bash(which -a go1*)",
+      "Bash(git check-ignore *)",
+      "Read(//nix/store/**)"
+    ]
+  }
+}

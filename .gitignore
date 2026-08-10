@@ -1,2 +1,5 @@
 .direnv/
 .envrc
+.env.prod
+
+.claude/settings.local.json

@@ -11,6 +11,12 @@
 
 ---
 
+## 📝 문서 참고 원칙
+
+- 명시적인 요청이 없다면, 각 `tiny_*` 모듈의 `docs/decisions/`와 `docs/notes.md`는 참고하지 않습니다.
+
+---
+
 ## 🛠 Tech Stack & Environment
 
 - **Language**: Go
