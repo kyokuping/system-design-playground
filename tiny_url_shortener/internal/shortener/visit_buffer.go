@@ -55,10 +55,9 @@ func NewVisitBuffer(flusher URLVisitFlusher, interval time.Duration, maxKeys int
 }
 
 func (b *VisitBuffer) RecordVisit(shortKey string, at time.Time) {
-	if b.closed.Load() || !b.mu.TryLock() {
-		b.dropped.Add(1)
-		return
-	}
+	// The critical section is a single map update, so waiting for the lock costs
+	// far less than the visit that dropping it would lose.
+	b.mu.Lock()
 	if b.closed.Load() {
 		b.mu.Unlock()
 		b.dropped.Add(1)
@@ -112,11 +111,14 @@ func (b *VisitBuffer) Close(ctx context.Context) error {
 }
 
 func (b *VisitBuffer) takePending() (map[string]URLVisitDelta, []string) {
+	// Allocate the replacements before locking. Holding the lock across these
+	// makes every concurrent visit wait on an allocation.
+	pending := make(map[string]URLVisitDelta, b.maxKeys)
+	order := make([]string, 0, b.maxKeys)
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	pending, order := b.pending, b.order
-	b.pending = make(map[string]URLVisitDelta, b.maxKeys)
-	b.order = make([]string, 0, b.maxKeys)
+	pending, b.pending = b.pending, pending
+	order, b.order = b.order, order
+	b.mu.Unlock()
 	return pending, order
 }
 

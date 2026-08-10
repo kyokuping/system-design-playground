@@ -3,6 +3,7 @@ package shortener
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -56,25 +57,37 @@ func TestVisitBuffer_AggregatesByKey(t *testing.T) {
 	}
 }
 
-func TestVisitBuffer_RecordVisitDoesNotWaitForContendedLock(t *testing.T) {
-	buffer := NewVisitBuffer(&stubVisitFlusher{}, time.Hour, 10)
+func TestVisitBuffer_ConcurrentVisitsAreNotDropped(t *testing.T) {
+	const workers, perWorker = 8, 250
+	flusher := &stubVisitFlusher{}
+	buffer := NewVisitBuffer(flusher, time.Hour, 10)
 	t.Cleanup(func() { _ = buffer.Close(context.Background()) })
-	buffer.mu.Lock()
-	done := make(chan struct{})
-	go func() {
-		buffer.RecordVisit("Ab12Cd3", time.Now())
-		close(done)
-	}()
 
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		buffer.mu.Unlock()
-		t.Fatal("RecordVisit() blocked on the aggregation lock")
+	var group sync.WaitGroup
+	for worker := range workers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			at := time.Now()
+			for range perWorker {
+				buffer.RecordVisit(fmt.Sprintf("key%04d", worker), at)
+			}
+		}()
 	}
-	buffer.mu.Unlock()
-	if buffer.DroppedVisits() != 1 {
-		t.Fatalf("dropped visits = %d, want 1", buffer.DroppedVisits())
+	group.Wait()
+
+	if err := buffer.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	var total int64
+	for _, visit := range flusher.batches[0] {
+		total += visit.Count
+	}
+	if total != workers*perWorker {
+		t.Fatalf("flushed visits = %d, want %d", total, workers*perWorker)
+	}
+	if dropped := buffer.DroppedVisits(); dropped != 0 {
+		t.Fatalf("dropped visits = %d, want 0", dropped)
 	}
 }
 
