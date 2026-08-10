@@ -94,26 +94,32 @@ func (r *MemoryRepository) FindByLongURL(_ context.Context, longURL *url.URL) (U
 	result.LongURL = cloneURL(result.LongURL)
 	return result, nil
 }
-func (r *MemoryRepository) RecordAccess(_ context.Context, key string, at time.Time) error {
-	_, err := r.recordAccess(key, at)
-	return err
-}
-func (r *MemoryRepository) RecordAccessWithRevision(_ context.Context, key string, at time.Time) (URLMapping, error) {
-	return r.recordAccess(key, at)
-}
-func (r *MemoryRepository) recordAccess(key string, at time.Time) (URLMapping, error) {
+func (r *MemoryRepository) RecordVisit(key string, at time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	record, exists := r.byKey[key]
 	if !exists {
-		return URLMapping{}, ErrURLMappingNotFound
+		return
 	}
 	record.visits++
-	record.mapping.LastAccessedAt = at
-	record.mapping.Revision = r.newRevision()
-	result := record.mapping
-	result.LongURL = cloneURL(result.LongURL)
-	return result, nil
+	if record.mapping.LastAccessedAt.Before(at) {
+		record.mapping.LastAccessedAt = at
+	}
+}
+func (r *MemoryRepository) FlushVisits(_ context.Context, visits []URLVisitDelta) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, visit := range visits {
+		record, exists := r.byKey[visit.ShortKey]
+		if !exists {
+			continue
+		}
+		record.visits += int(visit.Count)
+		if record.mapping.LastAccessedAt.Before(visit.LastSeen) {
+			record.mapping.LastAccessedAt = visit.LastSeen
+		}
+	}
+	return nil
 }
 func (r *MemoryRepository) Statistics(_ context.Context, key string) (URLStatistics, error) {
 	r.mu.RLock()

@@ -139,5 +139,6 @@ func jitter(ttl time.Duration) time.Duration {
 	if spread == 0 {
 		return ttl
 	}
-	return ttl - spread + time.Duration(rand.Int64N(int64(spread)*2+1))
+	// Never extend a positive entry beyond its URL expiration boundary.
+	return ttl - time.Duration(rand.Int64N(int64(spread)+1))
 }

@@ -51,8 +51,18 @@ type RevisionedRepository interface {
 	AssignsRevisions()
 }
 
-type URLAccessRecorder interface {
-	RecordAccess(ctx context.Context, shortKey string, at time.Time) error
+type URLVisitRecorder interface {
+	RecordVisit(shortKey string, at time.Time)
+}
+
+type URLVisitDelta struct {
+	ShortKey string
+	Count    int64
+	LastSeen time.Time
+}
+
+type URLVisitFlusher interface {
+	FlushVisits(ctx context.Context, visits []URLVisitDelta) error
 }
 
 type URLStatisticsRepository interface {
@@ -67,8 +77,4 @@ type MutableURLRepository interface {
 type RevisionedMutableURLRepository interface {
 	UpdateWithRevision(ctx context.Context, userID, shortKey string, longURL *url.URL) (URLMapping, error)
 	DeleteWithRevision(ctx context.Context, userID, shortKey string) (int64, error)
-}
-
-type RevisionedAccessRecorder interface {
-	RecordAccessWithRevision(ctx context.Context, shortKey string, at time.Time) (URLMapping, error)
 }

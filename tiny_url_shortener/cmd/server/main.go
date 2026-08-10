@@ -6,8 +6,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"kyoku.dev/system-design-playground/tiny_url_shortener/internal/handler"
@@ -31,8 +33,23 @@ func main() {
 	defer closeRuntime()
 
 	log.Printf("tiny URL shortener %s server listening on %s", role, address)
-	if err := http.ListenAndServe(address, httpHandler); err != nil {
-		log.Fatal(err)
+	server := &http.Server{Addr: address, Handler: httpHandler, ReadHeaderTimeout: 5 * time.Second}
+	shutdown, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	serverError := make(chan error, 1)
+	go func() { serverError <- server.ListenAndServe() }()
+	select {
+	case err := <-serverError:
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("HTTP server stopped: %v", err)
+		}
+	case <-shutdown.Done():
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("HTTP shutdown: %v", err)
+		}
+		cancel()
+		<-serverError
 	}
 }
 
@@ -60,7 +77,7 @@ func newRuntimeHandler(ctx context.Context, role serverRole) (http.Handler, func
 		return nil, nil, err
 	}
 	var repository shortener.URLRepository = postgres
-	closeRuntime := func() { postgres.Close() }
+	closeDependencies := func() { postgres.Close() }
 
 	if redisAddress := strings.TrimSpace(os.Getenv("REDIS_ADDR")); redisAddress != "" {
 		cache, cacheErr := shortener.OpenRedis(ctx, redisAddress)
@@ -68,7 +85,7 @@ func newRuntimeHandler(ctx context.Context, role serverRole) (http.Handler, func
 			log.Printf("Redis unavailable; using PostgreSQL directly: %v", cacheErr)
 		} else {
 			repository = shortener.NewCachedRepository(postgres, cache, time.Hour, 30*time.Second)
-			closeRuntime = func() { _ = cache.Close(); postgres.Close() }
+			closeDependencies = func() { _ = cache.Close(); postgres.Close() }
 		}
 	}
 
@@ -76,14 +93,28 @@ func newRuntimeHandler(ctx context.Context, role serverRole) (http.Handler, func
 	if role != roleRedirect {
 		rangeSize, rangeErr := configuredRangeSize()
 		if rangeErr != nil {
-			closeRuntime()
+			closeDependencies()
 			return nil, nil, rangeErr
 		}
 		allocator := shortener.NewPostgresRangeAllocator(postgres, "url_mappings")
 		ids := shortener.NewDistributedIDGenerator(allocator, rangeSize)
 		generator = shortener.NewIDKeyGenerator(ids)
 	}
-	service := shortener.New(repository, generator)
+	var visits *shortener.VisitBuffer
+	if role != roleCommand {
+		visits = shortener.NewVisitBuffer(postgres, time.Second, 10_000)
+	}
+	service := shortener.NewWithVisitRecorder(repository, generator, visits)
+	closeRuntime := func() {
+		if visits != nil {
+			flushContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if flushErr := visits.Close(flushContext); flushErr != nil {
+				log.Printf("flush URL visits during shutdown: %v", flushErr)
+			}
+			cancel()
+		}
+		closeDependencies()
+	}
 	return roleHandler(role, service, configuredBaseURL(), postgres.Ping), closeRuntime, nil
 }
 

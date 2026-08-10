@@ -43,8 +43,8 @@ func TestCacheTTLJitterStaysWithinTenPercent(t *testing.T) {
 	var varied bool
 	for range 1_000 {
 		got := jitter(ttl)
-		if got < 54*time.Minute || got > 66*time.Minute {
-			t.Fatalf("jitter(%v) = %v, outside ±10%%", ttl, got)
+		if got < 54*time.Minute || got > ttl {
+			t.Fatalf("jitter(%v) = %v, outside downward 10%%", ttl, got)
 		}
 		if got != ttl {
 			varied = true

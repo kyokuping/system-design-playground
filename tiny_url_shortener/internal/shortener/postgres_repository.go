@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -116,12 +118,37 @@ func scanMapping(row rowScanner) (URLMapping, error) {
 	return mapping, nil
 }
 
-func (r *PostgresRepository) RecordAccess(ctx context.Context, shortKey string, at time.Time) error {
-	_, err := r.RecordAccessWithRevision(ctx, shortKey, at)
-	return err
+func (r *PostgresRepository) FlushVisits(ctx context.Context, visits []URLVisitDelta) error {
+	if len(visits) == 0 {
+		return nil
+	}
+
+	shortKeys, counts, lastSeen := visitBatchArrays(visits)
+	const statement = `UPDATE url_mappings AS m
+SET visits = m.visits + d.delta,
+    last_accessed_at = GREATEST(m.last_accessed_at, d.last_seen)
+FROM unnest($1::text[], $2::bigint[], $3::timestamptz[])
+    AS d(short_key, delta, last_seen)
+WHERE m.short_key = d.short_key`
+	for attempt := 0; ; attempt++ {
+		_, err := r.pool.Exec(ctx, statement, shortKeys, counts, lastSeen)
+		var postgresError *pgconn.PgError
+		if err == nil || !errors.As(err, &postgresError) || postgresError.Code != "40P01" || attempt == 2 {
+			return err
+		}
+	}
 }
-func (r *PostgresRepository) RecordAccessWithRevision(ctx context.Context, shortKey string, at time.Time) (URLMapping, error) {
-	return scanMapping(r.pool.QueryRow(ctx, `UPDATE url_mappings SET visits=visits+1,last_accessed_at=$2,updated_at=$2,revision=nextval('url_mapping_revision_seq') WHERE short_key=$1 RETURNING short_key,normalized_url,creator_user_id,last_accessed_at,revision`, shortKey, at))
+
+func visitBatchArrays(visits []URLVisitDelta) ([]string, []int64, []time.Time) {
+	visits = slices.Clone(visits)
+	slices.SortFunc(visits, func(a, b URLVisitDelta) int { return strings.Compare(a.ShortKey, b.ShortKey) })
+	shortKeys := make([]string, len(visits))
+	counts := make([]int64, len(visits))
+	lastSeen := make([]time.Time, len(visits))
+	for i, visit := range visits {
+		shortKeys[i], counts[i], lastSeen[i] = visit.ShortKey, visit.Count, visit.LastSeen
+	}
+	return shortKeys, counts, lastSeen
 }
 func (r *PostgresRepository) Statistics(ctx context.Context, shortKey string) (URLStatistics, error) {
 	var statistics URLStatistics
@@ -169,7 +196,7 @@ func (r *PostgresRepository) missingOrForbidden(ctx context.Context, userID, sho
 	if !creator {
 		return ErrForbidden
 	}
-	return nil
+	return ErrShortURLConflict
 }
 
 type PostgresRangeAllocator struct {

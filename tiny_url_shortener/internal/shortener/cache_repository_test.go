@@ -30,8 +30,25 @@ func TestCachedRepository_CacheHitSkipsSource(t *testing.T) {
 	}
 }
 
+func TestCachedRepository_RedirectCacheHitDoesNotWriteCache(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	cache := &stubURLCache{cached: CachedURL{
+		LongURL:        "https://example.com/hit",
+		LastAccessedAt: now,
+	}}
+	repository := NewCachedRepository(&countingRepository{}, cache, time.Hour, 30*time.Second)
+	service := NewWithClock(repository, NewRandomKeyGenerator(), func() time.Time { return now })
+
+	if _, err := service.GetLongURL("Ab12Cd3"); err != nil {
+		t.Fatalf("GetLongURL() error = %v", err)
+	}
+	if cache.setCalls != 0 {
+		t.Fatalf("cache writes = %d, want 0", cache.setCalls)
+	}
+}
+
 func TestCachedRepository_CacheMissFillsFromSource(t *testing.T) {
-	source := &countingRepository{mapping: URLMapping{ShortKey: "Ab12Cd3", LongURL: mustCacheURL(t, "https://example.com/source")}}
+	source := &countingRepository{mapping: URLMapping{ShortKey: "Ab12Cd3", LongURL: mustCacheURL(t, "https://example.com/source"), LastAccessedAt: time.Now()}}
 	cache := &stubURLCache{getErr: ErrCacheMiss}
 	repository := NewCachedRepository(source, cache, time.Hour, 30*time.Second)
 
@@ -165,7 +182,7 @@ func TestCachedRepository_LateNegativeCannotOverwriteCreatedMapping(t *testing.T
 	}
 }
 
-func TestCachedRepository_CacheHitPreservesExpiration(t *testing.T) {
+func TestCachedRepository_ExpiredMappingIsNotCached(t *testing.T) {
 	lastAccessedAt := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	now := lastAccessedAt.AddDate(0, 6, 0)
 	source := &countingRepository{mapping: URLMapping{
@@ -183,12 +200,12 @@ func TestCachedRepository_CacheHitPreservesExpiration(t *testing.T) {
 			t.Fatalf("attempt %d: error = %v, want ErrURLMappingExpired", attempt, err)
 		}
 	}
-	if source.findCalls != 1 {
-		t.Fatalf("source calls = %d, want 1", source.findCalls)
+	if source.findCalls != 2 {
+		t.Fatalf("source calls = %d, want 2", source.findCalls)
 	}
 }
 
-func TestCachedRepository_RecordAccessRefreshesCachedExpiration(t *testing.T) {
+func TestCachedRepository_PositiveTTLStopsAtExpirationBoundary(t *testing.T) {
 	lastAccessedAt := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	now := lastAccessedAt.AddDate(0, 6, 0).Add(-time.Minute)
 	mapping := URLMapping{
@@ -196,20 +213,16 @@ func TestCachedRepository_RecordAccessRefreshesCachedExpiration(t *testing.T) {
 		LongURL:        mustCacheURL(t, "https://example.com/active"),
 		LastAccessedAt: lastAccessedAt,
 	}
-	source := NewMemoryRepository()
-	if err := source.Save(context.Background(), mapping); err != nil {
-		t.Fatalf("source.Save() error = %v", err)
-	}
-	cache := &orderedURLCache{}
+	source := &countingRepository{mapping: mapping}
+	cache := &stubURLCache{getErr: ErrCacheMiss}
 	repository := NewCachedRepository(source, cache, time.Hour, 30*time.Second)
-	service := NewWithClock(repository, NewRandomKeyGenerator(), func() time.Time { return now })
+	repository.now = func() time.Time { return now }
 
-	if _, err := service.GetLongURL(mapping.ShortKey); err != nil {
-		t.Fatalf("first GetLongURL() error = %v", err)
+	if _, err := repository.FindByShortKey(context.Background(), mapping.ShortKey); err != nil {
+		t.Fatalf("FindByShortKey() error = %v", err)
 	}
-	now = lastAccessedAt.AddDate(0, 6, 0).Add(time.Minute)
-	if _, err := service.GetLongURL(mapping.ShortKey); err != nil {
-		t.Fatalf("second GetLongURL() error = %v; cached access time was not refreshed", err)
+	if cache.positiveTTL != time.Minute {
+		t.Fatalf("positive TTL = %v, want %v", cache.positiveTTL, time.Minute)
 	}
 }
 
@@ -277,6 +290,8 @@ type stubURLCache struct {
 	cached      CachedURL
 	getErr      error
 	positive    URLMapping
+	positiveTTL time.Duration
+	setCalls    int
 	setErr      error
 	negativeSet bool
 	deleteCalls int
@@ -285,8 +300,10 @@ type stubURLCache struct {
 func (c *stubURLCache) Get(context.Context, string) (CachedURL, error) {
 	return c.cached, c.getErr
 }
-func (c *stubURLCache) SetPositive(_ context.Context, mapping URLMapping, _ time.Duration) error {
+func (c *stubURLCache) SetPositive(_ context.Context, mapping URLMapping, ttl time.Duration) error {
 	c.positive = mapping
+	c.positiveTTL = ttl
+	c.setCalls++
 	return c.setErr
 }
 func (c *stubURLCache) SetNegativeIfAbsent(context.Context, string, time.Duration) (bool, error) {

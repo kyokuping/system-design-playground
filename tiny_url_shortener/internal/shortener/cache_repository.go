@@ -33,10 +33,11 @@ type CachedRepository struct {
 	cache       URLCache
 	positiveTTL time.Duration
 	negativeTTL time.Duration
+	now         func() time.Time
 }
 
 func NewCachedRepository(source URLRepository, cache URLCache, positiveTTL, negativeTTL time.Duration) *CachedRepository {
-	return &CachedRepository{source: source, cache: cache, positiveTTL: positiveTTL, negativeTTL: negativeTTL}
+	return &CachedRepository{source: source, cache: cache, positiveTTL: positiveTTL, negativeTTL: negativeTTL, now: time.Now}
 }
 
 func (r *CachedRepository) Save(ctx context.Context, mapping URLMapping) error {
@@ -44,7 +45,7 @@ func (r *CachedRepository) Save(ctx context.Context, mapping URLMapping) error {
 		return err
 	}
 	mapping = r.persistedMapping(ctx, mapping)
-	_ = r.cache.SetPositive(ctx, mapping, r.positiveTTL)
+	r.setPositive(ctx, mapping)
 	return nil
 }
 
@@ -57,7 +58,7 @@ func (r *CachedRepository) SaveWithOwner(ctx context.Context, mapping URLMapping
 		return err
 	}
 	mapping = r.persistedMapping(ctx, mapping)
-	_ = r.cache.SetPositive(ctx, mapping, r.positiveTTL)
+	r.setPositive(ctx, mapping)
 	return nil
 }
 
@@ -92,8 +93,26 @@ func (r *CachedRepository) FindByShortKey(ctx context.Context, shortKey string) 
 		}
 		return URLMapping{}, err
 	}
-	_ = r.cache.SetPositive(ctx, mapping, r.positiveTTL)
+	r.setPositive(ctx, mapping)
 	return mapping, nil
+}
+
+func (r *CachedRepository) setPositive(ctx context.Context, mapping URLMapping) {
+	ttl, ok := r.cacheTTL(mapping)
+	if ok {
+		_ = r.cache.SetPositive(ctx, mapping, ttl)
+	}
+}
+
+func (r *CachedRepository) cacheTTL(mapping URLMapping) (time.Duration, bool) {
+	ttl := mapping.LastAccessedAt.AddDate(0, 6, 0).Sub(r.now())
+	if ttl <= 0 {
+		return 0, false
+	}
+	if r.positiveTTL > 0 && r.positiveTTL < ttl {
+		ttl = r.positiveTTL
+	}
+	return ttl, true
 }
 
 func mappingFromCache(shortKey string, cached CachedURL) (URLMapping, bool) {
@@ -124,35 +143,6 @@ func (r *CachedRepository) FindByLongURL(ctx context.Context, longURL *url.URL) 
 	return r.source.FindByLongURL(ctx, longURL)
 }
 
-func (r *CachedRepository) RecordAccess(ctx context.Context, shortKey string, at time.Time) error {
-	if recorder, ok := r.source.(RevisionedAccessRecorder); ok {
-		mapping, err := recorder.RecordAccessWithRevision(ctx, shortKey, at)
-		if err != nil {
-			return err
-		}
-		if err := r.cache.SetPositive(ctx, mapping, r.positiveTTL); err != nil {
-			_ = r.cache.Invalidate(ctx, shortKey, mapping.Revision, r.positiveTTL)
-		}
-		return nil
-	}
-	recorder, ok := r.source.(URLAccessRecorder)
-	if !ok {
-		return nil
-	}
-	if err := recorder.RecordAccess(ctx, shortKey, at); err != nil {
-		return err
-	}
-	if cached, err := r.cache.Get(ctx, shortKey); err == nil && !cached.Negative {
-		if mapping, valid := mappingFromCache(shortKey, cached); valid {
-			mapping.LastAccessedAt = at
-			if err := r.cache.SetPositive(ctx, mapping, r.positiveTTL); err != nil {
-				_ = r.cache.Delete(ctx, shortKey)
-			}
-		}
-	}
-	return nil
-}
-
 func (r *CachedRepository) Statistics(ctx context.Context, shortKey string) (URLStatistics, error) {
 	provider, ok := r.source.(URLStatisticsRepository)
 	if !ok {
@@ -167,7 +157,9 @@ func (r *CachedRepository) Update(ctx context.Context, userID, shortKey string, 
 		if err != nil {
 			return err
 		}
-		if err := r.cache.SetPositive(ctx, mapping, r.positiveTTL); err != nil {
+		if ttl, ok := r.cacheTTL(mapping); !ok {
+			_ = r.cache.Invalidate(ctx, shortKey, mapping.Revision, r.positiveTTL)
+		} else if err := r.cache.SetPositive(ctx, mapping, ttl); err != nil {
 			_ = r.cache.Invalidate(ctx, shortKey, mapping.Revision, r.positiveTTL)
 		}
 		return nil

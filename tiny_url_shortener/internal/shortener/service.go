@@ -26,6 +26,7 @@ type URLStatistics struct {
 type Shortener struct {
 	repository URLRepository
 	generator  KeyGenerator
+	visits     URLVisitRecorder
 	now        func() time.Time
 }
 
@@ -34,10 +35,19 @@ func New(repository URLRepository, generator KeyGenerator) *Shortener {
 }
 
 func NewWithClock(repository URLRepository, generator KeyGenerator, now func() time.Time) *Shortener {
+	visits, _ := repository.(URLVisitRecorder)
+	return initializeShortener(repository, generator, visits, now)
+}
+
+func NewWithVisitRecorder(repository URLRepository, generator KeyGenerator, visits URLVisitRecorder) *Shortener {
+	return initializeShortener(repository, generator, visits, time.Now)
+}
+
+func initializeShortener(repository URLRepository, generator KeyGenerator, visits URLVisitRecorder, now func() time.Time) *Shortener {
 	if now == nil {
 		now = time.Now
 	}
-	return &Shortener{repository: repository, generator: generator, now: now}
+	return &Shortener{repository: repository, generator: generator, visits: visits, now: now}
 }
 
 func (s *Shortener) GetShortURL(userID string, longURL *url.URL) (string, bool, error) {
@@ -102,11 +112,8 @@ func (s *Shortener) GetLongURL(shortKey string) (*url.URL, error) {
 	if err != nil {
 		return nil, err
 	}
-	now := s.now()
-	if recorder, ok := s.repository.(URLAccessRecorder); ok {
-		if err := recorder.RecordAccess(context.Background(), shortKey, now); err != nil {
-			return nil, err
-		}
+	if s.visits != nil {
+		s.visits.RecordVisit(shortKey, s.now())
 	}
 	return cloneURL(mapping.LongURL), nil
 }
