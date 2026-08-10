@@ -9,15 +9,16 @@ import (
 )
 
 var (
-	ErrInvalidUserID         = domain.ErrInvalidUserID
-	ErrInvalidURL            = domain.ErrInvalidURL
-	ErrInvalidShortKey       = domain.ErrInvalidShortKey
-	ErrURLMappingNotFound    = domain.ErrURLMappingNotFound
-	ErrURLMappingExpired     = domain.ErrURLMappingExpired
-	ErrShortURLConflict      = domain.ErrShortURLConflict
-	ErrKeyGenerationFailed   = domain.ErrKeyGenerationFailed
-	ErrForbidden             = domain.ErrForbidden
-	ErrOperationNotSupported = domain.ErrOperationNotSupported
+	ErrInvalidUserID          = domain.ErrInvalidUserID
+	ErrInvalidURL             = domain.ErrInvalidURL
+	ErrInvalidShortKey        = domain.ErrInvalidShortKey
+	ErrURLMappingNotFound     = domain.ErrURLMappingNotFound
+	ErrURLMappingExpired      = domain.ErrURLMappingExpired
+	ErrShortURLConflict       = domain.ErrShortURLConflict
+	ErrConcurrentModification = domain.ErrConcurrentModification
+	ErrKeyGenerationFailed    = domain.ErrKeyGenerationFailed
+	ErrForbidden              = domain.ErrForbidden
+	ErrOperationNotSupported  = domain.ErrOperationNotSupported
 )
 
 type URLMapping struct {

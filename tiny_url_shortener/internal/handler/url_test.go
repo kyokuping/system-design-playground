@@ -116,6 +116,19 @@ func TestPostShorten_KeyGenerationFailureReturnsInternalServerError(t *testing.T
 	}
 }
 
+func TestWriteDomainError_ConcurrentModificationReturnsConflict(t *testing.T) {
+	response := httptest.NewRecorder()
+
+	writeDomainError(response, shortener.ErrConcurrentModification)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusConflict)
+	}
+	if got, want := response.Body.String(), "URL mapping changed; retry request\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
 func TestGetShortURL_ExistingKeyReturnsTemporaryRedirect(t *testing.T) {
 	skipExpectedFailure(t)
 
