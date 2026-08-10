@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -291,6 +292,29 @@ func TestGetLongURL_UnknownKeyReturnsDomainError(t *testing.T) {
 	_, err := service.GetLongURL("Unknown")
 	if !errors.Is(err, ErrURLMappingNotFound) {
 		t.Fatalf("GetLongURL() error = %v, want ErrURLMappingNotFound", err)
+	}
+}
+
+func TestGetLongURL_RejectsInvalidShortKey(t *testing.T) {
+	service := newShortener()
+
+	_, err := service.GetLongURL("invalid-key")
+	if !errors.Is(err, ErrInvalidShortKey) {
+		t.Fatalf("GetLongURL() error = %v, want ErrInvalidShortKey", err)
+	}
+}
+
+func TestNormalizeURL_RejectsURLOverMaximumLength(t *testing.T) {
+	const maximumLength = 2048
+	prefix := "https://example.com/"
+	withinLimit := parseURL(t, prefix+strings.Repeat("a", maximumLength-len(prefix)))
+	overLimit := parseURL(t, prefix+strings.Repeat("a", maximumLength-len(prefix)+1))
+
+	if _, err := NormalizeURL(withinLimit); err != nil {
+		t.Fatalf("NormalizeURL() at limit returned an unexpected error: %v", err)
+	}
+	if _, err := NormalizeURL(overLimit); !errors.Is(err, ErrInvalidURL) {
+		t.Fatalf("NormalizeURL() over limit error = %v, want ErrInvalidURL", err)
 	}
 }
 
