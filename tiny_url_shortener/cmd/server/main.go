@@ -100,15 +100,19 @@ func newRuntimeHandler(ctx context.Context, role serverRole) (http.Handler, func
 		ids := shortener.NewDistributedIDGenerator(allocator, rangeSize)
 		generator = shortener.NewIDKeyGenerator(ids)
 	}
-	var visits *shortener.VisitBuffer
+	// Keep the recorder interface nil for roles without a buffer. Assigning a nil
+	// *VisitBuffer to it would leave the interface non-nil and panic on use.
+	var buffer *shortener.VisitBuffer
+	var visits shortener.URLVisitRecorder
 	if role != roleCommand {
-		visits = shortener.NewVisitBuffer(postgres, time.Second, 10_000)
+		buffer = shortener.NewVisitBuffer(postgres, time.Second, 10_000)
+		visits = buffer
 	}
 	service := shortener.NewWithVisitRecorder(repository, generator, visits)
 	closeRuntime := func() {
-		if visits != nil {
+		if buffer != nil {
 			flushContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if flushErr := visits.Close(flushContext); flushErr != nil {
+			if flushErr := buffer.Close(flushContext); flushErr != nil {
 				log.Printf("flush URL visits during shutdown: %v", flushErr)
 			}
 			cancel()
