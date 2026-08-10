@@ -446,7 +446,7 @@ func (*transactionalCreationRepository) FindByShortKey(context.Context, string) 
 func (*transactionalCreationRepository) FindByLongURL(context.Context, *url.URL) (URLMapping, error) {
 	return URLMapping{}, ErrURLMappingNotFound
 }
-func (r *transactionalCreationRepository) SaveWithOwner(_ context.Context, mapping URLMapping, _ URLOwnership) error {
+func (r *transactionalCreationRepository) SaveWithOwner(_ context.Context, mapping URLMapping) error {
 	r.transactionCalls++
 	r.creatorUserID = mapping.CreatorUserID
 	return nil

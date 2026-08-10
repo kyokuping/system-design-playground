@@ -49,12 +49,12 @@ func (r *CachedRepository) Save(ctx context.Context, mapping URLMapping) error {
 	return nil
 }
 
-func (r *CachedRepository) SaveWithOwner(ctx context.Context, mapping URLMapping, owner URLOwnership) error {
+func (r *CachedRepository) SaveWithOwner(ctx context.Context, mapping URLMapping) error {
 	creator, ok := r.source.(URLMappingCreator)
 	if !ok {
 		return ErrOperationNotSupported
 	}
-	if err := creator.SaveWithOwner(ctx, mapping, owner); err != nil {
+	if err := creator.SaveWithOwner(ctx, mapping); err != nil {
 		return err
 	}
 	mapping = r.persistedMapping(ctx, mapping)

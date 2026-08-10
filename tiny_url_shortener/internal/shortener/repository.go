@@ -44,7 +44,7 @@ type URLRepository interface {
 // owner atomically. Shortener falls back to the base interface for simple test
 // repositories.
 type URLMappingCreator interface {
-	SaveWithOwner(ctx context.Context, mapping URLMapping, ownership URLOwnership) error
+	SaveWithOwner(ctx context.Context, mapping URLMapping) error
 }
 
 type RevisionedRepository interface {

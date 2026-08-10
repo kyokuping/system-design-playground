@@ -51,14 +51,14 @@ func (r *PostgresRepository) Save(ctx context.Context, mapping URLMapping) error
 	return err
 }
 
-func (r *PostgresRepository) SaveWithOwner(ctx context.Context, mapping URLMapping, owner URLOwnership) error {
+func (r *PostgresRepository) SaveWithOwner(ctx context.Context, mapping URLMapping) error {
 	transaction, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
-	if _, err = transaction.Exec(ctx, `INSERT INTO url_mappings (short_key, normalized_url, creator_user_id, last_accessed_at) VALUES ($1,$2,$3,$4)`, mapping.ShortKey, mapping.LongURL.String(), owner.UserID, mapping.LastAccessedAt); err == nil {
-		_, err = transaction.Exec(ctx, `INSERT INTO url_owners (user_id, short_key) VALUES ($1,$2)`, owner.UserID, owner.ShortKey)
+	if _, err = transaction.Exec(ctx, `INSERT INTO url_mappings (short_key, normalized_url, creator_user_id, last_accessed_at) VALUES ($1,$2,$3,$4)`, mapping.ShortKey, mapping.LongURL.String(), mapping.CreatorUserID, mapping.LastAccessedAt); err == nil {
+		_, err = transaction.Exec(ctx, `INSERT INTO url_owners (user_id, short_key) VALUES ($1,$2)`, mapping.CreatorUserID, mapping.ShortKey)
 	}
 	var postgresError *pgconn.PgError
 	if errors.As(err, &postgresError) && postgresError.Code == "23505" {
