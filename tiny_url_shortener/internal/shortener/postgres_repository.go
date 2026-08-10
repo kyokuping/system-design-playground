@@ -196,7 +196,7 @@ func (r *PostgresRepository) missingOrForbidden(ctx context.Context, userID, sho
 	if !creator {
 		return ErrForbidden
 	}
-	return ErrShortURLConflict
+	return ErrConcurrentModification
 }
 
 type PostgresRangeAllocator struct {

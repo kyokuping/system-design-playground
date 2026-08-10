@@ -160,6 +160,8 @@ func writeDomainError(response http.ResponseWriter, err error) {
 		http.Error(response, "URL mapping expired", http.StatusGone)
 	case errors.Is(err, domain.ErrShortURLConflict):
 		http.Error(response, "short URL already exists", http.StatusConflict)
+	case errors.Is(err, domain.ErrConcurrentModification):
+		http.Error(response, "URL mapping changed; retry request", http.StatusConflict)
 	case errors.Is(err, domain.ErrForbidden):
 		http.Error(response, "forbidden", http.StatusForbidden)
 	default:
