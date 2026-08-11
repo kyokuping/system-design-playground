@@ -30,17 +30,34 @@ go run ./cmd/server
 
 `SERVER_ROLE`의 기본값은 로컬 개발용 `all`입니다. 운영과 같은 역할 분리 배포를
 로컬에서 확인하려면 서로 다른 포트에서 command와 redirect 역할을 실행합니다.
+각 서버는 포그라운드에서 실행되므로 두 명령은 `cd tiny_url_shortener`를 마친
+별도의 터미널에서 하나씩 실행합니다.
 
 ```bash
+# 터미널 1
 SERVER_ROLE=command HTTP_ADDR=:8081 \
 DATABASE_URL='postgres://app:dev@localhost:15432/app?sslmode=disable' \
 REDIS_ADDR='localhost:16379' SHORT_URL_BASE='http://localhost:8082' \
 go run ./cmd/server
+```
 
+```bash
+# 터미널 2
 SERVER_ROLE=redirect HTTP_ADDR=:8082 \
 DATABASE_URL='postgres://app:dev@localhost:15432/app?sslmode=disable' \
 REDIS_ADDR='localhost:16379' \
 go run ./cmd/server
+```
+
+역할을 분리하면 단축 URL 생성은 command 서버(`:8081`)로, 리다이렉트는
+redirect 서버(`:8082`)로 요청합니다.
+
+```bash
+curl -i -X POST http://localhost:8081/api/v1/short-urls \
+  -H 'Content-Type: application/json' \
+  --data '{"user_id":"user-123","url":"https://example.com/long/path"}'
+
+curl -i http://localhost:8082/0000000
 ```
 
 URL을 생성하고 조회하는 예시는 다음과 같습니다.
