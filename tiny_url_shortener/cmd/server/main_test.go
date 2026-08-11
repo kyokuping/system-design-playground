@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestConfiguredRangeSizeUsesDefault(t *testing.T) {
@@ -104,6 +106,33 @@ func TestConfiguredBaseURL_AllowsMissingValueForRedirectRole(t *testing.T) {
 	}
 	if got != "" {
 		t.Fatalf("configuredBaseURL() = %q, want empty", got)
+	}
+}
+
+// A failed bind used to be logged and then swallowed, so a server that never
+// started still exited 0 and looked healthy to whatever supervised it.
+func TestServe_ReturnsErrorWhenAddressIsUnavailable(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer func() { _ = occupied.Close() }()
+
+	server := &http.Server{Addr: occupied.Addr().String(), ReadHeaderTimeout: time.Second}
+	if err := serve(context.Background(), server, roleAll); err == nil {
+		t.Fatal("serve() error = nil, want an error")
+	}
+}
+
+func TestServe_ReturnsNilAfterShutdown(t *testing.T) {
+	shutdown, stop := context.WithCancel(context.Background())
+	server := &http.Server{Addr: "127.0.0.1:0", ReadHeaderTimeout: time.Second}
+	served := make(chan error, 1)
+	go func() { served <- serve(shutdown, server, roleAll) }()
+
+	stop()
+	if err := <-served; err != nil {
+		t.Fatalf("serve() error = %v, want nil", err)
 	}
 }
 
