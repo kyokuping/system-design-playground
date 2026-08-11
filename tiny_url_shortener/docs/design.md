@@ -194,11 +194,12 @@ flowchart TD
         Redirect -->|"Fallback on miss"| DB
     end
 
-    subgraph IDGeneration["Distributed ID Generation Tier"]
-        Command -->|"Request next ID"| IDGen["ID Generator Cluster"]
+    subgraph IDGeneration["ID Generation (command 서버 프로세스 내장)"]
+        Command -->|"Request next ID"| IDGen["ID Generator"]
         IDGen -->|"Refill when local range is exhausted"| Allocator["Range Allocation Service"]
-        Allocator -->|"Atomically reserve range"| IDState[("PostgreSQL: ID Allocation State")]
     end
+
+    Allocator -->|"Atomically reserve range"| IDState[("PostgreSQL: ID Allocation State")]
 ```
 
 초기 구현에서는 하나의 서버 프로세스가 Command API와 Redirect 요청을 모두
@@ -229,7 +230,14 @@ cache miss이면 PostgreSQL에서 URL 매핑을 읽은 뒤 Redis를 채우는 ca
 
 Range Allocation Service는 PostgreSQL의 ID allocation state를 transaction으로
 갱신해 서로 겹치지 않는 범위를 할당한다. 초기 구현에서는 URL 매핑과 같은
-PostgreSQL 클러스터의 논리적으로 분리된 테이블을 사용한다. 구체적인 선택과
-장애 처리 정책은
+PostgreSQL 클러스터의 논리적으로 분리된 테이블을 사용한다.
+
+ID Generator와 Range Allocation Service는 초기 구현에서 별도 프로세스가 아니라
+command 서버 안의 컴포넌트다. 따라서 ID Generator 인스턴스는 command 서버
+인스턴스와 1:1로 대응하고 범위는 프로세스마다 독립적이며, 실제로 분리된 것은
+PostgreSQL의 ID allocation state뿐이다. Redirect 역할은 ID를 발급하지 않으므로
+ID Generator를 만들지 않는다. 범위 크기는 `ID_RANGE_SIZE` 설정값으로 조정한다.
+
+구체적인 선택과 장애 처리 정책은
 [ADR 03. 분산 카운터로 단축 URL ID를 생성한다](decisions/03-use-distributed-counter-for-url-ids.md)에
 기록한다.

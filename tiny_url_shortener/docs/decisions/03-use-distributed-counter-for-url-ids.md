@@ -61,6 +61,21 @@ Initially, place this table in the same PostgreSQL cluster as the URL mappings.
 `ID Allocation State` is not a separate database containing every issued ID; it
 is logical state that stores the start of the next range to allocate.
 
+In the initial implementation, embed the ID Generator and Range Allocation
+Service in the Shortener API command server instead of running them as separate
+processes. In the diagram, only `PostgreSQL: ID Allocation State` is actually
+separate; the other two components run inside the command-server process. The
+`ID Generator Cluster` therefore corresponds to the set of command-server
+instances, each with its own range and local counter. The Redirect role does not
+issue IDs and does not construct an ID Generator.
+
+This deployment choice does not affect allocation correctness because instances
+still use non-overlapping ranges. PostgreSQL transactions, rather than the
+application, guarantee atomic range allocation, so allocators remain safe in
+multiple processes. However, ID-generation capacity cannot be scaled separately
+from URL-creation API capacity. If independent scaling becomes necessary, split
+the allocator into a separate service that uses the same allocation state.
+
 Do not hard-code the initial range size as an implementation constant. Make it
 configurable, verify behavior and failure handling with a small value, and then
 choose a value by measuring range-refill frequency and wasted IDs under load.
@@ -85,8 +100,10 @@ obfuscation policy.
 - Resume allocating new ranges after the Range Allocation Service and
   PostgreSQL recover.
 - Do not store ID allocation state in the cache Redis instance.
-- Apply unique constraints to the numeric ID and seven-character short key in
-  PostgreSQL as the final safeguard against duplicates.
+- Do not store numeric IDs in a separate URL-mapping column. Because Base62
+  encoding maps distinct IDs to distinct seven-character keys, the
+  `url_mappings.short_key` primary key is the final safeguard against duplicates
+  caused by overlapping allocations or encoding errors.
 
 In the current design, PostgreSQL is also the source of truth for URL mappings.
 Therefore, even if an ID Generator still has IDs in its range, a URL-creation
