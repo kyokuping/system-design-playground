@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,7 +17,15 @@ import (
 	"kyoku.dev/system-design-playground/tiny_url_shortener/internal/shortener"
 )
 
+// main keeps the exit status honest: run releases its dependencies through its
+// own defers before main turns a startup or runtime failure into a non-zero exit.
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	address := os.Getenv("HTTP_ADDR")
 	if address == "" {
 		address = ":8080"
@@ -24,32 +33,49 @@ func main() {
 
 	role, err := configuredServerRole()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	httpHandler, closeRuntime, err := newRuntimeHandler(context.Background(), role)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer closeRuntime()
 
-	log.Printf("tiny URL shortener %s server listening on %s", role, address)
-	server := &http.Server{Addr: address, Handler: httpHandler, ReadHeaderTimeout: 5 * time.Second}
 	shutdown, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	return serve(shutdown, &http.Server{
+		Addr:              address,
+		Handler:           httpHandler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}, role)
+}
+
+// serve binds before announcing the address so the startup log reports a port
+// the server actually holds, and reports a failed bind to the caller instead of
+// leaving it as a log line behind a successful exit.
+func serve(shutdown context.Context, server *http.Server, role serverRole) error {
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("tiny URL shortener %s server listening on %s", role, listener.Addr())
 	serverError := make(chan error, 1)
-	go func() { serverError <- server.ListenAndServe() }()
+	go func() { serverError <- server.Serve(listener) }()
 	select {
 	case err := <-serverError:
-		if !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("HTTP server stopped: %v", err)
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
 		}
+		return err
 	case <-shutdown.Done():
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
-			log.Printf("HTTP shutdown: %v", err)
+			return err
 		}
-		cancel()
 		<-serverError
+		return nil
 	}
 }
 
