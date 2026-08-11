@@ -59,17 +59,22 @@ func newHandler() http.Handler {
 	allocator := shortener.NewMemoryRangeAllocator(nil)
 	ids := shortener.NewDistributedIDGenerator(allocator, 1_000)
 	service := shortener.New(repository, shortener.NewIDKeyGenerator(ids))
-	return rootHandler(service, configuredBaseURL(), func(context.Context) error { return nil })
+	return rootHandler(service, "http://localhost:8080", func(context.Context) error { return nil })
 }
 
 func newRuntimeHandler(ctx context.Context, role serverRole) (http.Handler, func(), error) {
+	baseURL, err := configuredBaseURL(role)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if databaseURL == "" {
 		repository := shortener.NewMemoryRepository()
 		allocator := shortener.NewMemoryRangeAllocator(nil)
 		ids := shortener.NewDistributedIDGenerator(allocator, 1_000)
 		service := shortener.New(repository, shortener.NewIDKeyGenerator(ids))
-		return roleHandler(role, service, configuredBaseURL(), func(context.Context) error { return nil }), func() {}, nil
+		return roleHandler(role, service, baseURL, func(context.Context) error { return nil }), func() {}, nil
 	}
 
 	postgres, err := shortener.OpenPostgres(ctx, databaseURL)
@@ -119,7 +124,7 @@ func newRuntimeHandler(ctx context.Context, role serverRole) (http.Handler, func
 		}
 		closeDependencies()
 	}
-	return roleHandler(role, service, configuredBaseURL(), postgres.Ping), closeRuntime, nil
+	return roleHandler(role, service, baseURL, postgres.Ping), closeRuntime, nil
 }
 
 type serverRole string
@@ -155,12 +160,15 @@ func configuredRangeSize() (uint64, error) {
 	return parsed, nil
 }
 
-func configuredBaseURL() string {
+// configuredBaseURL resolves the origin that short URLs are minted under. Roles
+// that mint URLs must be told explicitly: defaulting to localhost would hand
+// every caller an unreachable link instead of failing at startup.
+func configuredBaseURL(role serverRole) (string, error) {
 	baseURL := strings.TrimSpace(os.Getenv("SHORT_URL_BASE"))
-	if baseURL == "" {
-		return "http://localhost:8080"
+	if baseURL == "" && role != roleRedirect {
+		return "", errors.New("SHORT_URL_BASE is required for the " + string(role) + " role")
 	}
-	return baseURL
+	return baseURL, nil
 }
 
 func rootHandler(
