@@ -71,6 +71,42 @@ func TestConfiguredServerRoleRejectsUnknownRole(t *testing.T) {
 	}
 }
 
+func TestConfiguredBaseURL_ReadsEnvironment(t *testing.T) {
+	t.Setenv("SHORT_URL_BASE", " https://tiny.example ")
+	got, err := configuredBaseURL(roleCommand)
+	if err != nil {
+		t.Fatalf("configuredBaseURL() error = %v", err)
+	}
+	if got != "https://tiny.example" {
+		t.Fatalf("configuredBaseURL() = %q, want %q", got, "https://tiny.example")
+	}
+}
+
+// An unset base URL used to fall back to localhost, which silently handed every
+// caller an unreachable short URL instead of failing at startup.
+func TestConfiguredBaseURL_RejectsMissingValueForURLMintingRoles(t *testing.T) {
+	for _, role := range []serverRole{roleAll, roleCommand} {
+		t.Run(string(role), func(t *testing.T) {
+			t.Setenv("SHORT_URL_BASE", "")
+			if _, err := configuredBaseURL(role); err == nil {
+				t.Fatal("configuredBaseURL() error = nil, want an error")
+			}
+		})
+	}
+}
+
+// The redirect role never mints short URLs, so it must start without the base URL.
+func TestConfiguredBaseURL_AllowsMissingValueForRedirectRole(t *testing.T) {
+	t.Setenv("SHORT_URL_BASE", "")
+	got, err := configuredBaseURL(roleRedirect)
+	if err != nil {
+		t.Fatalf("configuredBaseURL() error = %v", err)
+	}
+	if got != "" {
+		t.Fatalf("configuredBaseURL() = %q, want empty", got)
+	}
+}
+
 func TestRoleHandlersExposeOnlyTheirTrafficClass(t *testing.T) {
 	probe := func(context.Context) error { return nil }
 
