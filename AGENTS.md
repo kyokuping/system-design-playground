@@ -33,6 +33,7 @@ Name tests `Test<Subject>_<Behavior>`, e.g. `TestGetShortURL_RejectsInvalidURL`.
 
 - Do not create branches or commits unless the user explicitly asks.
 - Conventional Commits: `type(scope): imperative subject`, lowercase, no trailing period.
+- Subject line only. Write no message body and no trailers, including `Co-Authored-By`.
 - Scope is the module directory with underscores replaced by hyphens:
   `tiny_url_shortener` → `tiny-url-shortener`. Omit the scope for repo-wide changes.
 - For branch names, remove the `tiny_` prefix and replace underscores with hyphens, then append
