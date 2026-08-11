@@ -14,6 +14,8 @@ FROM scratch
 USER 65532:65532
 COPY --from=build /out/server /server
 COPY --from=build /out/healthcheck /healthcheck
+# Both binaries read HTTP_ADDR: the server binds it, the health check probes it.
+ENV HTTP_ADDR=:8080
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 CMD ["/healthcheck"]
 ENTRYPOINT ["/server"]
