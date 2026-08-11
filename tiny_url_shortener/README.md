@@ -74,6 +74,16 @@ docker build --tag tiny-url-shortener:dev .
 접근할 수 있습니다. 개발 데이터까지 초기화하려면 `down --volumes`를
 사용한 뒤 인프라를 다시 시작합니다.
 
+빌드한 이미지는 컨테이너 헬스체크를 포함합니다. `DATABASE_URL` 없이 실행하면
+메모리 저장소로 기동하므로 Postgres와 Redis 없이 이미지만 확인할 수 있습니다.
+
+```bash
+docker run --rm -d --name tiny-url-shortener-dev -p 8080:8080 \
+  -e SERVER_ROLE=all -e SHORT_URL_BASE=http://localhost:8080 tiny-url-shortener:dev
+docker ps --filter name=tiny-url-shortener-dev --format '{{.Status}}'
+docker stop tiny-url-shortener-dev
+```
+
 서버는 `POST /api/v1/short-urls`, `GET /api/v1/short-urls/{shortKey}`,
 `GET /{shortKey}`, `GET /healthz`를 제공합니다. API 계약과 오류 응답은
 [시스템 설계](docs/design.md)에 기록되어 있습니다.
