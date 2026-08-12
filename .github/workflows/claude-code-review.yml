@@ -1,0 +1,78 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - "**/docs/decisions/**"
+      - "**/docs/notes.md"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Review
+    if: github.event.pull_request.draft == false
+    environment: claude-review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251 # v1.0.133
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          track_progress: true
+          use_sticky_comment: true
+
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request. The PR branch is already checked out in the
+            working directory. Read AGENTS.md for the repository's conventions
+            before reviewing.
+
+            Review only what this PR changes. Focus on:
+
+            1. **Correctness** — bugs, unhandled edge cases, incorrect error handling.
+               Errors should be wrapped with `%w` where callers may need to inspect
+               them, and never silently discarded.
+            2. **Concurrency** — data races, goroutine leaks, missing `context`
+               propagation or cancellation, blocking channel operations that can
+               deadlock, misuse of `sync` primitives.
+            3. **Go idiom** — the code should read like Go, not like a transliteration
+               of another language: goroutines and channels over hand-rolled
+               scheduling, `context.Context` as the first parameter, small interfaces
+               defined at the consumer. For infrastructure components (key-value
+               stores, message queues, caches), prefer established Go ecosystem
+               packages and clients over bespoke implementations.
+            4. **Tests** — behavior changes should arrive with tests that state the
+               intended behavior. Test names follow `Test<Subject>_<Behavior>`
+               (e.g. `TestGetShortURL_RejectsInvalidURL`). Flag missing coverage for
+               new behavior, and tests that assert implementation details rather
+               than behavior.
+            5. **API surface** — exported symbols that should be unexported,
+               leaked implementation types, inconsistent naming within the module.
+
+            Do not report formatting or lint findings — CI already runs `gofmt`,
+            `golangci-lint`, and race-enabled tests. Skip style nits and preference
+            comments.
+
+            Use inline comments for specific issues, anchored to the changed lines.
+            Use one top-level comment for the summary. If the change looks good,
+            say so briefly instead of manufacturing findings.
+
+          claude_args: |
+            --model claude-opus-5
+            --max-turns 40
+            --max-budget-usd 5
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*)"
