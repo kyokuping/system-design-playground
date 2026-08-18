@@ -6,6 +6,7 @@ on:
       - "tiny_*/**/*.go"
       - "tiny_*/go.mod"
       - "tiny_*/go.sum"
+      - "!tiny_*/bench/**"
 
 permissions:
   contents: read
@@ -58,7 +59,7 @@ jobs:
       - name: Check gofmt
         shell: bash
         run: |
-          mapfile -d '' go_files < <(git ls-files -z '*.go')
+          mapfile -d '' go_files < <(git ls-files -z '*.go' ':(exclude)bench/**')
 
           if (( ${#go_files[@]} == 0 )); then
             echo "No Go files found; skipping gofmt"

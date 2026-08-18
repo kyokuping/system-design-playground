@@ -6,6 +6,7 @@ on:
     paths-ignore:
       - "**/docs/decisions/**"
       - "**/docs/notes.md"
+      - "**/bench/**"
 
 permissions:
   contents: read
@@ -41,7 +42,9 @@ jobs:
             working directory. Read AGENTS.md for the repository's conventions
             before reviewing.
 
-            Review only what this PR changes. Focus on:
+            Review only what this PR changes. Ignore files under `**/bench/**`,
+            including when the pull request also changes files outside that path.
+            Focus on:
 
             1. **Correctness** — bugs, unhandled edge cases, incorrect error handling.
                Errors should be wrapped with `%w` where callers may need to inspect
