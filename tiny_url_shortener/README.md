@@ -35,7 +35,7 @@ go run ./cmd/server
 
 ```bash
 # 터미널 1
-SERVER_ROLE=command HTTP_ADDR=:8081 \
+SERVER_ROLE=command HTTP_ADDR=:8081 METRICS_ADDR=:9091 \
 DATABASE_URL='postgres://app:dev@localhost:15432/app?sslmode=disable' \
 REDIS_ADDR='localhost:16379' SHORT_URL_BASE='http://localhost:8082' \
 go run ./cmd/server
@@ -43,7 +43,7 @@ go run ./cmd/server
 
 ```bash
 # 터미널 2
-SERVER_ROLE=redirect HTTP_ADDR=:8082 \
+SERVER_ROLE=redirect HTTP_ADDR=:8082 METRICS_ADDR=:9092 \
 DATABASE_URL='postgres://app:dev@localhost:15432/app?sslmode=disable' \
 REDIS_ADDR='localhost:16379' \
 go run ./cmd/server
@@ -77,6 +77,23 @@ curl -i http://localhost:8080/0000000
 사용하며, Redis에 연결할 수 없거나 cache miss이면 PostgreSQL로 조회합니다.
 `ID_RANGE_SIZE`는 ID를 생성하는 Command 서버에만 적용됩니다(기본값 1000).
 
+## 메트릭
+
+서버는 데이터 플레인과 분리된 `METRICS_ADDR` listener에서 Prometheus 형식의
+`GET /metrics`를 제공합니다. 기본 주소는 `:9090`입니다.
+
+```bash
+curl http://localhost:9090/metrics
+```
+
+Go runtime과 process 메트릭 외에 HTTP 요청 수·지연시간과 방문 버퍼의 drop,
+flush 실패, 대기 중인 key 수를 노출합니다. HTTP 메트릭은 `method`와 `code`만
+label로 사용합니다. 방문 버퍼 메트릭은 PostgreSQL 방문 버퍼를 사용하는 `all`과
+`redirect` 역할에서만 나타납니다.
+
+배포 시 metrics 포트는 외부 ingress나 public service에 연결하지 않고 내부
+Prometheus scrape 대상으로만 사용합니다.
+
 개발용 인프라의 로그 확인과 종료 명령은 다음과 같습니다.
 
 ```bash
@@ -102,5 +119,6 @@ docker stop tiny-url-shortener-dev
 ```
 
 서버는 `POST /api/v1/short-urls`, `GET /api/v1/short-urls/{shortKey}`,
-`GET /{shortKey}`, `GET /healthz`를 제공합니다. API 계약과 오류 응답은
+`GET /{shortKey}`, `GET /-/healthz`를 제공합니다. 별도 metrics listener는
+`GET /metrics`를 제공합니다. API 계약과 오류 응답은
 [시스템 설계](docs/design.md)에 기록되어 있습니다.
