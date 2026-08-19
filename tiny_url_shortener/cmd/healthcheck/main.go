@@ -41,5 +41,5 @@ func healthcheckURL(listenAddr string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("HTTP_ADDR %q is not a listen address: %w", listenAddr, err)
 	}
-	return "http://" + net.JoinHostPort("127.0.0.1", port) + "/healthz", nil
+	return "http://" + net.JoinHostPort("127.0.0.1", port) + "/-/healthz", nil
 }

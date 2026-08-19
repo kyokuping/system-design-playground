@@ -30,12 +30,16 @@ func run() error {
 	if address == "" {
 		address = ":8080"
 	}
+	metricsAddress := os.Getenv("METRICS_ADDR")
+	if metricsAddress == "" {
+		metricsAddress = ":9090"
+	}
 
 	role, err := configuredServerRole()
 	if err != nil {
 		return err
 	}
-	httpHandler, closeRuntime, err := newRuntimeHandler(context.Background(), role)
+	httpHandler, metricsHandler, closeRuntime, err := newRuntimeHandler(context.Background(), role)
 	if err != nil {
 		return err
 	}
@@ -47,35 +51,57 @@ func run() error {
 		Addr:              address,
 		Handler:           httpHandler,
 		ReadHeaderTimeout: 5 * time.Second,
-	}, role)
+	}, role, &http.Server{
+		Addr:              metricsAddress,
+		Handler:           metricsHandler,
+		ReadHeaderTimeout: 5 * time.Second,
+	})
 }
 
 // serve binds before announcing the address so the startup log reports a port
 // the server actually holds, and reports a failed bind to the caller instead of
 // leaving it as a log line behind a successful exit.
-func serve(shutdown context.Context, server *http.Server, role serverRole) error {
-	listener, err := net.Listen("tcp", server.Addr)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("tiny URL shortener %s server listening on %s", role, listener.Addr())
-	serverError := make(chan error, 1)
-	go func() { serverError <- server.Serve(listener) }()
-	select {
-	case err := <-serverError:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
-	case <-shutdown.Done():
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(ctx); err != nil {
+func serve(shutdown context.Context, server *http.Server, role serverRole, additional ...*http.Server) error {
+	servers := append([]*http.Server{server}, additional...)
+	listeners := make([]net.Listener, 0, len(servers))
+	for _, current := range servers {
+		listener, err := net.Listen("tcp", current.Addr)
+		if err != nil {
+			for _, opened := range listeners {
+				_ = opened.Close()
+			}
 			return err
 		}
-		<-serverError
+		listeners = append(listeners, listener)
+	}
+
+	log.Printf("tiny URL shortener %s server listening on %s", role, listeners[0].Addr())
+	for _, listener := range listeners[1:] {
+		log.Printf("tiny URL shortener metrics server listening on %s", listener.Addr())
+	}
+	serverError := make(chan error, len(servers))
+	for index, current := range servers {
+		go func() { serverError <- current.Serve(listeners[index]) }()
+	}
+	shutdownServers := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, current := range servers {
+			if err := current.Shutdown(ctx); err != nil {
+				return err
+			}
+		}
 		return nil
+	}
+	select {
+	case err := <-serverError:
+		shutdownErr := shutdownServers()
+		if !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return shutdownErr
+	case <-shutdown.Done():
+		return shutdownServers()
 	}
 }
 
@@ -88,10 +114,10 @@ func newHandler() http.Handler {
 	return rootHandler(service, "http://localhost:8080", func(context.Context) error { return nil })
 }
 
-func newRuntimeHandler(ctx context.Context, role serverRole) (http.Handler, func(), error) {
+func newRuntimeHandler(ctx context.Context, role serverRole) (http.Handler, http.Handler, func(), error) {
 	baseURL, err := configuredBaseURL(role)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
@@ -100,12 +126,13 @@ func newRuntimeHandler(ctx context.Context, role serverRole) (http.Handler, func
 		allocator := shortener.NewMemoryRangeAllocator(nil)
 		ids := shortener.NewDistributedIDGenerator(allocator, 1_000)
 		service := shortener.New(repository, shortener.NewIDKeyGenerator(ids))
-		return roleHandler(role, service, baseURL, func(context.Context) error { return nil }), func() {}, nil
+		application, metrics := newMetricsHandlers(roleHandler(role, service, baseURL, func(context.Context) error { return nil }), nil)
+		return application, metrics, func() {}, nil
 	}
 
 	postgres, err := shortener.OpenPostgres(ctx, databaseURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var repository shortener.URLRepository = postgres
 	closeDependencies := func() { postgres.Close() }
@@ -125,7 +152,7 @@ func newRuntimeHandler(ctx context.Context, role serverRole) (http.Handler, func
 		rangeSize, rangeErr := configuredRangeSize()
 		if rangeErr != nil {
 			closeDependencies()
-			return nil, nil, rangeErr
+			return nil, nil, nil, rangeErr
 		}
 		allocator := shortener.NewPostgresRangeAllocator(postgres, "url_mappings")
 		ids := shortener.NewDistributedIDGenerator(allocator, rangeSize)
@@ -150,7 +177,8 @@ func newRuntimeHandler(ctx context.Context, role serverRole) (http.Handler, func
 		}
 		closeDependencies()
 	}
-	return roleHandler(role, service, baseURL, postgres.Ping), closeRuntime, nil
+	application, metrics := newMetricsHandlers(roleHandler(role, service, baseURL, postgres.Ping), buffer)
+	return application, metrics, closeRuntime, nil
 }
 
 type serverRole string
@@ -221,7 +249,7 @@ func roleHandler(
 		urlHandler = handler.NewURLHandler(service, baseURL)
 	}
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodGet && request.URL.Path == "/healthz" {
+		if request.Method == http.MethodGet && request.URL.Path == "/-/healthz" {
 			if err := readinessProbe(request.Context()); err != nil {
 				http.Error(response, "service unavailable", http.StatusServiceUnavailable)
 				return

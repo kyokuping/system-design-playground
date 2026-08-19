@@ -27,6 +27,8 @@ type VisitBuffer struct {
 	pending   map[string]URLVisitDelta
 	order     []string
 	dropped   atomic.Uint64
+	flushErrs atomic.Uint64
+	buffered  atomic.Int64
 	closed    atomic.Bool
 	closeOnce sync.Once
 	closeErr  error
@@ -63,7 +65,12 @@ func (b *VisitBuffer) RecordVisit(shortKey string, at time.Time) {
 		b.dropped.Add(1)
 		return
 	}
+	_, exists := b.pending[shortKey]
+	fullBeforeMerge := len(b.pending) == b.maxKeys
 	dropped := mergeVisit(b.pending, &b.order, URLVisitDelta{ShortKey: shortKey, Count: 1, LastSeen: at}, b.maxKeys)
+	if !exists && !fullBeforeMerge {
+		b.buffered.Add(1)
+	}
 	full := len(b.pending) == b.maxKeys
 	b.mu.Unlock()
 	b.dropped.Add(uint64(dropped))
@@ -76,6 +83,10 @@ func (b *VisitBuffer) RecordVisit(shortKey string, at time.Time) {
 }
 
 func (b *VisitBuffer) DroppedVisits() uint64 { return b.dropped.Load() }
+
+func (b *VisitBuffer) FlushFailures() uint64 { return b.flushErrs.Load() }
+
+func (b *VisitBuffer) PendingKeys() int { return int(b.buffered.Load()) }
 
 func (b *VisitBuffer) Flush(ctx context.Context) error {
 	if b.closed.Load() {
@@ -131,7 +142,12 @@ func (b *VisitBuffer) run() {
 	flush := func(ctx context.Context) error {
 		pending, order := b.takePending()
 		for _, shortKey := range order {
+			_, exists := retry[shortKey]
+			fullBeforeMerge := len(retry) == b.maxKeys
 			b.dropped.Add(uint64(mergeVisit(retry, &retryOrder, pending[shortKey], b.maxKeys)))
+			if exists || fullBeforeMerge {
+				b.buffered.Add(-1)
+			}
 		}
 		if len(retry) == 0 {
 			return nil
@@ -141,8 +157,10 @@ func (b *VisitBuffer) run() {
 			visits = append(visits, retry[shortKey])
 		}
 		if err := b.flusher.FlushVisits(ctx, visits); err != nil {
+			b.flushErrs.Add(1)
 			return err
 		}
+		b.buffered.Add(-int64(len(retry)))
 		clear(retry)
 		retryOrder = retryOrder[:0]
 		return nil
