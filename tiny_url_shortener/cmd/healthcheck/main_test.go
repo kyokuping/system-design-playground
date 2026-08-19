@@ -7,11 +7,11 @@ func TestHealthcheckURL_DerivesPortFromListenAddr(t *testing.T) {
 		addr string
 		want string
 	}{
-		{addr: ":8080", want: "http://127.0.0.1:8080/healthz"},
-		{addr: ":9090", want: "http://127.0.0.1:9090/healthz"},
-		{addr: "0.0.0.0:9090", want: "http://127.0.0.1:9090/healthz"},
-		{addr: "127.0.0.1:9090", want: "http://127.0.0.1:9090/healthz"},
-		{addr: "[::]:9090", want: "http://127.0.0.1:9090/healthz"},
+		{addr: ":8080", want: "http://127.0.0.1:8080/-/healthz"},
+		{addr: ":9090", want: "http://127.0.0.1:9090/-/healthz"},
+		{addr: "0.0.0.0:9090", want: "http://127.0.0.1:9090/-/healthz"},
+		{addr: "127.0.0.1:9090", want: "http://127.0.0.1:9090/-/healthz"},
+		{addr: "[::]:9090", want: "http://127.0.0.1:9090/-/healthz"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.addr, func(t *testing.T) {

@@ -6,8 +6,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"kyoku.dev/system-design-playground/tiny_url_shortener/internal/shortener"
 )
 
 func TestConfiguredRangeSizeUsesDefault(t *testing.T) {
@@ -124,6 +127,20 @@ func TestServe_ReturnsErrorWhenAddressIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestServe_ReturnsErrorWhenMetricsAddressIsUnavailable(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer func() { _ = occupied.Close() }()
+
+	application := &http.Server{Addr: "127.0.0.1:0", ReadHeaderTimeout: time.Second}
+	metrics := &http.Server{Addr: occupied.Addr().String(), ReadHeaderTimeout: time.Second}
+	if err := serve(context.Background(), application, roleAll, metrics); err == nil {
+		t.Fatal("serve() error = nil, want an error")
+	}
+}
+
 func TestServe_ReturnsNilAfterShutdown(t *testing.T) {
 	shutdown, stop := context.WithCancel(context.Background())
 	server := &http.Server{Addr: "127.0.0.1:0", ReadHeaderTimeout: time.Second}
@@ -159,7 +176,7 @@ func TestRoleHandlersExposeOnlyTheirTrafficClass(t *testing.T) {
 }
 
 func TestHealthzReturnsNoContent(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	request := httptest.NewRequest(http.MethodGet, "/-/healthz", nil)
 	response := httptest.NewRecorder()
 	probeCalled := false
 
@@ -169,15 +186,15 @@ func TestHealthzReturnsNoContent(t *testing.T) {
 	}).ServeHTTP(response, request)
 
 	if response.Code != http.StatusNoContent {
-		t.Fatalf("GET /healthz status = %d, want %d", response.Code, http.StatusNoContent)
+		t.Fatalf("GET /-/healthz status = %d, want %d", response.Code, http.StatusNoContent)
 	}
 	if !probeCalled {
-		t.Fatal("GET /healthz did not call readiness probe")
+		t.Fatal("GET /-/healthz did not call readiness probe")
 	}
 }
 
 func TestHealthzReturnsServiceUnavailableWhenDependencyIsUnavailable(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	request := httptest.NewRequest(http.MethodGet, "/-/healthz", nil)
 	response := httptest.NewRecorder()
 
 	rootHandler(nil, "", func(context.Context) error {
@@ -185,8 +202,76 @@ func TestHealthzReturnsServiceUnavailableWhenDependencyIsUnavailable(t *testing.
 	}).ServeHTTP(response, request)
 
 	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("GET /healthz status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+		t.Fatalf("GET /-/healthz status = %d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
+}
+
+func TestMetricsEndpoint_ExposesHTTPMetrics(t *testing.T) {
+	application, metrics := newMetricsHandlers(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusNoContent)
+	}), nil)
+	application.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/test", nil))
+
+	response := httptest.NewRecorder()
+	metrics.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /metrics status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/plain") {
+		t.Fatalf("GET /metrics Content-Type = %q, want text/plain", contentType)
+	}
+	body := response.Body.String()
+	for _, metric := range []string{
+		`tiny_url_shortener_http_requests_total{code="204",method="get"} 1`,
+		"tiny_url_shortener_http_request_duration_seconds_count",
+		`tiny_url_shortener_http_request_duration_seconds_bucket{code="204",method="get",le="0.075"}`,
+		"go_goroutines",
+	} {
+		if !strings.Contains(body, metric) {
+			t.Fatalf("GET /metrics body does not contain %q", metric)
+		}
+	}
+
+	dataResponse := httptest.NewRecorder()
+	application.ServeHTTP(dataResponse, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if dataResponse.Code != http.StatusNoContent {
+		t.Fatalf("data-plane GET /metrics status = %d, want application status %d", dataResponse.Code, http.StatusNoContent)
+	}
+	metricsResponse := httptest.NewRecorder()
+	metrics.ServeHTTP(metricsResponse, httptest.NewRequest(http.MethodGet, "/other", nil))
+	if metricsResponse.Code != http.StatusNotFound {
+		t.Fatalf("metrics-plane GET /other status = %d, want %d", metricsResponse.Code, http.StatusNotFound)
+	}
+}
+
+func TestMetricsEndpoint_ExposesVisitBufferMetrics(t *testing.T) {
+	buffer := shortener.NewVisitBuffer(failingVisitFlusher{}, time.Hour, 10)
+	buffer.RecordVisit("Ab12Cd3", time.Now())
+	if err := buffer.Close(context.Background()); err == nil {
+		t.Fatal("Close() error = nil, want flush failure")
+	}
+	buffer.RecordVisit("Zy98Xw7", time.Now())
+	_, metrics := newMetricsHandlers(http.NotFoundHandler(), buffer)
+
+	response := httptest.NewRecorder()
+	metrics.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	for _, metric := range []string{
+		"tiny_url_shortener_visit_buffer_dropped_total 1",
+		"tiny_url_shortener_visit_buffer_flush_failures_total 1",
+		"tiny_url_shortener_visit_buffer_pending_keys 1",
+	} {
+		if !strings.Contains(response.Body.String(), metric) {
+			t.Fatalf("GET /metrics body does not contain %q", metric)
+		}
+	}
+}
+
+type failingVisitFlusher struct{}
+
+func (failingVisitFlusher) FlushVisits(context.Context, []shortener.URLVisitDelta) error {
+	return errors.New("postgres unavailable")
 }
 
 func TestOtherMethodOrPathReturnsNotFound(t *testing.T) {
@@ -195,7 +280,7 @@ func TestOtherMethodOrPathReturnsNotFound(t *testing.T) {
 		method string
 		path   string
 	}{
-		{name: "other method", method: http.MethodPost, path: "/healthz"},
+		{name: "other method", method: http.MethodPost, path: "/-/healthz"},
 		{name: "other path", method: http.MethodGet, path: "/unknown"},
 	}
 

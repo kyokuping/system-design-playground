@@ -100,6 +100,12 @@ func TestVisitBuffer_RetainsFailedBatchForRetry(t *testing.T) {
 	if err := buffer.Flush(context.Background()); err == nil {
 		t.Fatal("first Flush() error = nil")
 	}
+	if failures := buffer.FlushFailures(); failures != 1 {
+		t.Fatalf("FlushFailures() = %d, want 1", failures)
+	}
+	if pending := buffer.PendingKeys(); pending != 1 {
+		t.Fatalf("PendingKeys() after failed flush = %d, want 1", pending)
+	}
 	flusher.mu.Lock()
 	flusher.err = nil
 	flusher.mu.Unlock()
@@ -108,6 +114,19 @@ func TestVisitBuffer_RetainsFailedBatchForRetry(t *testing.T) {
 	}
 	if len(flusher.batches) != 2 || flusher.batches[1][0].Count != 1 {
 		t.Fatalf("batches = %+v", flusher.batches)
+	}
+}
+
+func TestVisitBuffer_ReportsPendingKeys(t *testing.T) {
+	buffer := NewVisitBuffer(&stubVisitFlusher{}, time.Hour, 10)
+	t.Cleanup(func() { _ = buffer.Close(context.Background()) })
+
+	buffer.RecordVisit("Ab12Cd3", time.Now())
+	buffer.RecordVisit("Ab12Cd3", time.Now())
+	buffer.RecordVisit("Zy98Xw7", time.Now())
+
+	if pending := buffer.PendingKeys(); pending != 2 {
+		t.Fatalf("PendingKeys() = %d, want 2", pending)
 	}
 }
 
