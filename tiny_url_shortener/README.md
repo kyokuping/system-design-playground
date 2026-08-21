@@ -2,83 +2,123 @@
 
 『요즘 개발자들을 위한 시스템 설계 수업』 9장을 참고한 URL 단축 서비스입니다.
 
-## 요구사항
+## 문서
 
-### MVP
+- [시스템 설계](docs/design.md)
 
-- 긴 URL을 입력받아 고유한 고정 길이의 단축 키를 생성한다.
-- 단축 키를 입력받아 원본 URL을 반환한다.
-- 입력받은 URL이 유효한 HTTP 또는 HTTPS URL인지 검사한다.
-- 동일한 긴 URL에는 동일한 단축 키를 반환한다.
-- 존재하지 않는 단축 키와 잘못된 요청에 적절한 오류를 반환한다.
-- 단축 URL 요청을 원본 URL로 리다이렉트한다.
+## 실행 환경
 
-### 추후 지원
+개발 시 Go 애플리케이션은 Nix 개발 셸의 호스트 프로세스로 실행하고,
+Postgres와 Redis만 Docker Compose로 실행합니다.
 
-- 사용자가 원하는 맞춤형 단축 키를 생성한다.
-- 마지막 사용 시점으로부터 6개월이 지난 단축 URL을 만료시킨다.
-- URL 생성자가 원본 URL을 수정하거나 URL 매핑을 삭제한다.
-- 단축 URL의 사용량을 분석하고 모니터링한다.
-- 사용자 계정과 URL 소유권을 관리한다.
+```bash
+# 저장소 루트에서 실행
+nix develop
+cd tiny_url_shortener
 
-## 비기능적 요구사항
+docker compose \
+  --env-file .env.dev \
+  -f compose.yaml \
+  -f compose.dev.yaml \
+  up -d --wait
 
-- 사용자 1억 명 규모와 갑작스러운 요청 증가에 대응할 수 있어야 한다.
-- 읽기 요청이 쓰기 요청보다 많은 서비스를 가정한다.
-- URL 조회 응답 시간은 p95 기준 100ms 이하를 목표로 한다.
-- 동일한 단축 키에는 항상 동일한 원본 URL을 반환해야 한다.
-- 시스템 장애가 발생해도 저장된 URL 매핑을 안전하게 유지해야 한다.
-
-구체적인 일일 활성 사용자 수, URL 생성량, 초당 조회량은 용량 산정 단계에서
-추가로 정의한다.
-
-## API 계약
-
-### URL 단축
-
-`POST /api/v1/short-urls`
-
-요청:
-
-```json
-{
-  "user_id": "user-123",
-  "url": "https://example.com/very/long/path"
-}
+DATABASE_URL='postgres://app:dev@localhost:15432/app?sslmode=disable' \
+REDIS_ADDR='localhost:16379' \
+SHORT_URL_BASE='http://localhost:8080' \
+go run ./cmd/server
 ```
 
-신규 매핑은 `201 Created`와 관리 리소스 경로를 반환한다.
+`SERVER_ROLE`의 기본값은 로컬 개발용 `all`입니다. 운영과 같은 역할 분리 배포를
+로컬에서 확인하려면 서로 다른 포트에서 command와 redirect 역할을 실행합니다.
+각 서버는 포그라운드에서 실행되므로 두 명령은 `cd tiny_url_shortener`를 마친
+별도의 터미널에서 하나씩 실행합니다.
 
-```http
-Location: /api/v1/short-urls/Ab12Cd34
+```bash
+# 터미널 1
+SERVER_ROLE=command HTTP_ADDR=:8081 METRICS_ADDR=:9091 \
+DATABASE_URL='postgres://app:dev@localhost:15432/app?sslmode=disable' \
+REDIS_ADDR='localhost:16379' SHORT_URL_BASE='http://localhost:8082' \
+go run ./cmd/server
 ```
 
-```json
-{
-  "short_key": "Ab12Cd34",
-  "short_url": "https://tiny.url/Ab12Cd34",
-  "long_url": "https://example.com/very/long/path"
-}
+```bash
+# 터미널 2
+SERVER_ROLE=redirect HTTP_ADDR=:8082 METRICS_ADDR=:9092 \
+DATABASE_URL='postgres://app:dev@localhost:15432/app?sslmode=disable' \
+REDIS_ADDR='localhost:16379' \
+go run ./cmd/server
 ```
 
-잘못된 URL을 전달하면 `400 Bad Request`를 반환한다.
+역할을 분리하면 단축 URL 생성은 command 서버(`:8081`)로, 리다이렉트는
+redirect 서버(`:8082`)로 요청합니다.
 
-### 관리용 매핑 조회
+```bash
+curl -i -X POST http://localhost:8081/api/v1/short-urls \
+  -H 'Content-Type: application/json' \
+  --data '{"user_id":"user-123","url":"https://example.com/long/path"}'
 
-`GET /api/v1/short-urls/{shortKey}`
-
-성공하면 생성 응답과 같은 매핑 정보를 `200 OK` JSON으로 반환한다. 이 요청은
-공개 링크 방문 횟수와 마지막 접근 시각을 갱신하지 않는다.
-
-### 공개 리다이렉트
-
-`GET /{shortKey}`
-
-성공 응답 (`307 Temporary Redirect`):
-
-```http
-HTTP/1.1 307 Temporary Redirect
-Location: https://example.com/very/long/path
+curl -i http://localhost:8082/0000000
 ```
 
-단축 키가 존재하지 않으면 `404 Not Found`를 반환한다.
+URL을 생성하고 조회하는 예시는 다음과 같습니다.
+
+```bash
+curl -i -X POST http://localhost:8080/api/v1/short-urls \
+  -H 'Content-Type: application/json' \
+  --data '{"user_id":"user-123","url":"https://example.com/long/path"}'
+
+curl -i http://localhost:8080/api/v1/short-urls/0000000
+curl -i http://localhost:8080/0000000
+```
+
+서버는 시작할 때 PostgreSQL 스키마를 준비하고, PostgreSQL을 URL 매핑과
+분산 ID 범위의 원본 저장소로 사용합니다. Command 서버는 생성한 매핑을 PostgreSQL에
+저장한 뒤 Redis 읽기 모델도 갱신합니다. Redirect 서버는 Redis cache-aside 조회를
+사용하며, Redis에 연결할 수 없거나 cache miss이면 PostgreSQL로 조회합니다.
+`ID_RANGE_SIZE`는 ID를 생성하는 Command 서버에만 적용됩니다(기본값 1000).
+
+## 메트릭
+
+서버는 데이터 플레인과 분리된 `METRICS_ADDR` listener에서 Prometheus 형식의
+`GET /metrics`를 제공합니다. 기본 주소는 `:9090`입니다.
+
+```bash
+curl http://localhost:9090/metrics
+```
+
+Go runtime과 process 메트릭 외에 HTTP 요청 수·지연시간과 방문 버퍼의 drop,
+flush 실패, 대기 중인 key 수를 노출합니다. HTTP 메트릭은 `method`와 `code`만
+label로 사용합니다. 방문 버퍼 메트릭은 PostgreSQL 방문 버퍼를 사용하는 `all`과
+`redirect` 역할에서만 나타납니다.
+
+배포 시 metrics 포트는 외부 ingress나 public service에 연결하지 않고 내부
+Prometheus scrape 대상으로만 사용합니다.
+
+개발용 인프라의 로그 확인과 종료 명령은 다음과 같습니다.
+
+```bash
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml logs --follow
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml down
+
+go test ./...
+docker build --tag tiny-url-shortener:dev .
+```
+
+개발용 Postgres는 `localhost:15432`, Redis는 `localhost:16379`에서
+접근할 수 있습니다. 개발 데이터까지 초기화하려면 `down --volumes`를
+사용한 뒤 인프라를 다시 시작합니다.
+
+빌드한 이미지는 컨테이너 헬스체크를 포함합니다. `DATABASE_URL` 없이 실행하면
+메모리 저장소로 기동하므로 Postgres와 Redis 없이 이미지만 확인할 수 있습니다.
+
+```bash
+docker run --rm -d --name tiny-url-shortener-dev -p 8080:8080 \
+  -e SERVER_ROLE=all -e SHORT_URL_BASE=http://localhost:8080 tiny-url-shortener:dev
+docker ps --filter name=tiny-url-shortener-dev --format '{{.Status}}'
+docker stop tiny-url-shortener-dev
+```
+
+서버는 `POST /api/v1/short-urls`, `GET /api/v1/short-urls/{shortKey}`,
+`GET /{shortKey}`, `GET /-/healthz`를 제공합니다. 별도 metrics listener는
+`GET /metrics`를 제공합니다. API 계약과 오류 응답은
+[시스템 설계](docs/design.md)에 기록되어 있습니다.
