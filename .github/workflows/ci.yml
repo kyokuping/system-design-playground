@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     paths:
+      - ".golangci.yml"
       - "tiny_*/**/*.go"
       - "tiny_*/go.mod"
       - "tiny_*/go.sum"
@@ -126,3 +127,4 @@ jobs:
         with:
           version: v2.12
           working-directory: ${{ matrix.module }}
+          args: --enable=gosec
